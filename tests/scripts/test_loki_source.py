@@ -1,3 +1,4 @@
+import datetime
 import sys
 import time
 from pathlib import Path
@@ -7,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
 from loki_source import (
     _to_unix_ns,
     _warn_if_capped,
+    _warn_if_stale,
     build_selector,
     parse_query_range_response,
 )
@@ -16,7 +18,7 @@ def test_build_selector_base():
     sel = build_selector("mcp", "produkcja")
     assert sel == (
         '{coolify_projectName="kajet-turbo", '
-        'container=~"kajet-mcp-.*", '
+        'service="kajet-mcp", '
         'coolify_environmentName="produkcja"}'
     )
 
@@ -25,19 +27,20 @@ def test_build_selector_with_min_level_warning():
     sel = build_selector("mcp", "produkcja", min_level="warning")
     assert sel == (
         '{coolify_projectName="kajet-turbo", '
-        'container=~"kajet-mcp-.*", '
+        'service="kajet-mcp", '
         'coolify_environmentName="produkcja", '
         'level=~"warning|error|critical"}'
     )
 
 
 def test_build_selector_with_msg_filter():
+    """msg stopped being a Loki label (per-UUID cardinality), so it filters the line."""
     sel = build_selector("mcp", "produkcja", msg_filter=["save_note", "note_updated"])
     assert sel == (
         '{coolify_projectName="kajet-turbo", '
-        'container=~"kajet-mcp-.*", '
-        'coolify_environmentName="produkcja", '
-        'msg=~"save_note|note_updated"}'
+        'service="kajet-mcp", '
+        'coolify_environmentName="produkcja"} '
+        '| json | msg=~"save_note|note_updated"'
     )
 
 
@@ -106,7 +109,7 @@ def test_to_unix_ns_relative_duration():
 
 def test_to_unix_ns_iso_timestamp():
     assert _to_unix_ns("2026-01-01T00:00:00") == int(
-        __import__("datetime").datetime.fromisoformat("2026-01-01T00:00:00").timestamp() * 1e9
+        datetime.datetime.fromisoformat("2026-01-01T00:00:00").timestamp() * 1e9
     )
 
 
@@ -133,3 +136,38 @@ def test_warn_if_capped_no_warning_over_5000(capsys):
     _warn_if_capped(events)
     captured = capsys.readouterr()
     assert captured.err == ""
+
+
+def _event_aged(seconds: float) -> dict:
+    """One event whose ts is `seconds` behind now, in the Z-suffixed form Loki emits."""
+    when = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=seconds)
+    return {"ts": when.isoformat().replace("+00:00", "Z"), "msg": "event"}
+
+
+def test_warn_if_stale_warns_when_newest_event_lags(capsys):
+    _warn_if_stale([_event_aged(600)], "now")
+    captured = capsys.readouterr()
+    assert "warning: newest Loki event is" in captured.err
+    assert "may not match" in captured.err
+
+
+def test_warn_if_stale_silent_on_fresh_window(capsys):
+    _warn_if_stale([_event_aged(5)], "now")
+    assert capsys.readouterr().err == ""
+
+
+def test_warn_if_stale_silent_for_historical_window(capsys):
+    """A window ending in the past is expected to lag — only `until=now` implies freshness."""
+    _warn_if_stale([_event_aged(86400)], "2026-01-01T00:00:00")
+    assert capsys.readouterr().err == ""
+
+
+def test_warn_if_stale_silent_without_events(capsys):
+    _warn_if_stale([], "now")
+    assert capsys.readouterr().err == ""
+
+
+def test_warn_if_stale_silent_on_unparseable_ts(capsys):
+    """A malformed ts is the line parser's problem, not a staleness signal."""
+    _warn_if_stale([{"ts": "not a timestamp"}, {"msg": "no ts at all"}], "now")
+    assert capsys.readouterr().err == ""
