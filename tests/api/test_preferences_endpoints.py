@@ -1,12 +1,12 @@
-from fastapi import FastAPI
 from sqlmodel import Session
 from starlette.testclient import TestClient
 
 from kajet_turbo.api.preferences import router
-from kajet_turbo.dependencies import get_preferences_service, get_required_user
+from kajet_turbo.dependencies import CurrentUser, get_preferences_service, get_required_user
 from kajet_turbo.models import User
 from kajet_turbo.repositories.users import UserRepository
 from kajet_turbo.services.preferences import PreferencesService
+from tests.api.conftest import build_test_app
 
 
 def _app(database, *, user_id="u1"):
@@ -14,10 +14,11 @@ def _app(database, *, user_id="u1"):
         s.add(User(id=user_id, email=f"{user_id}@e.com", created_at="2026-01-01"))
         s.commit()
     svc = PreferencesService(UserRepository(database.engine))
-    app = FastAPI()
-    app.include_router(router)
+    app = build_test_app(routers=(router,))
     app.dependency_overrides[get_preferences_service] = lambda: svc
-    app.dependency_overrides[get_required_user] = lambda: {"id": user_id}
+    app.dependency_overrides[get_required_user] = lambda: CurrentUser(
+        id=user_id, email="", timezone="", locale=""
+    )
     return TestClient(app)
 
 
@@ -48,25 +49,25 @@ def test_patch_invalid_case_timezone_returns_422(database):
     # exact-membership validation regardless of host OS.
     resp = client.patch("/api/me/preferences", json={"timezone": "europe/warsaw"})
     assert resp.status_code == 422
-    assert resp.json()["detail"] == "PREFERENCES_INVALID_INPUT"
+    assert resp.json()["error"] == "PREFERENCES_INVALID_INPUT"
 
 
 def test_patch_unsupported_locale_returns_422(database):
     client = _app(database)
     resp = client.patch("/api/me/preferences", json={"locale": "fr"})
     assert resp.status_code == 422
-    assert resp.json()["detail"] == "PREFERENCES_INVALID_INPUT"
+    assert resp.json()["error"] == "PREFERENCES_INVALID_INPUT"
 
 
 def test_patch_explicit_null_timezone_returns_422(database):
     client = _app(database)
     resp = client.patch("/api/me/preferences", json={"timezone": None})
     assert resp.status_code == 422
-    assert resp.json()["detail"] == "PREFERENCES_INVALID_INPUT"
+    assert resp.json()["error"] == "PREFERENCES_INVALID_INPUT"
 
 
 def test_patch_explicit_null_locale_returns_422(database):
     client = _app(database)
     resp = client.patch("/api/me/preferences", json={"locale": None})
     assert resp.status_code == 422
-    assert resp.json()["detail"] == "PREFERENCES_INVALID_INPUT"
+    assert resp.json()["error"] == "PREFERENCES_INVALID_INPUT"

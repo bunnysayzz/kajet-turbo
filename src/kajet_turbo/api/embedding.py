@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 
 from kajet_turbo.api.schemas import EmbeddingProfilesResponse
 from kajet_turbo.concurrency import run_sync
-from kajet_turbo.dependencies import get_embedding_profile_service, get_required_user
+from kajet_turbo.dependencies import CurrentUser, get_embedding_profile_service, get_required_user
 from kajet_turbo.services.embedding_profiles import EmbeddingProfileService
 
 router = APIRouter()
@@ -11,16 +11,16 @@ router = APIRouter()
 
 @router.get("/api/me/embedding-profiles", response_model=EmbeddingProfilesResponse)
 def api_list_embedding_profiles(
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     svc: EmbeddingProfileService = Depends(get_embedding_profile_service),
 ) -> JSONResponse:
-    return JSONResponse({"profiles": svc.list_profiles(user["id"])})
+    return JSONResponse({"profiles": svc.list_profiles(user.id)})
 
 
 @router.post("/api/me/embedding-profiles")
 async def api_create_embedding_profile(
     request: Request,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     svc: EmbeddingProfileService = Depends(get_embedding_profile_service),
 ) -> JSONResponse:
     try:
@@ -32,7 +32,7 @@ async def api_create_embedding_profile(
         # which cannot be called from this async route's running event loop.
         result = await run_sync(
             svc.create_profile,
-            user["id"],
+            user.id,
             name=body.get("name", ""),
             base_url=body.get("base_url", ""),
             model=body.get("model", ""),
@@ -47,7 +47,7 @@ async def api_create_embedding_profile(
 async def api_update_embedding_profile(
     profile_id: str,
     request: Request,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     svc: EmbeddingProfileService = Depends(get_embedding_profile_service),
 ) -> JSONResponse:
     try:
@@ -58,7 +58,7 @@ async def api_update_embedding_profile(
         # Offload to a worker thread (probe embed uses asyncio.run — see create above).
         result = await run_sync(
             svc.update_profile,
-            user["id"],
+            user.id,
             profile_id,
             name=body.get("name", ""),
             base_url=body.get("base_url", ""),
@@ -75,11 +75,11 @@ async def api_update_embedding_profile(
 @router.post("/api/me/embedding-profiles/{profile_id}/activate")
 def api_activate_embedding_profile(
     profile_id: str,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     svc: EmbeddingProfileService = Depends(get_embedding_profile_service),
 ) -> JSONResponse:
     try:
-        svc.activate_profile(user["id"], profile_id)
+        svc.activate_profile(user.id, profile_id)
     except ValueError:
         return JSONResponse({"error": "Profil nie istnieje."}, status_code=404)
     return JSONResponse({"ok": True})
@@ -88,8 +88,8 @@ def api_activate_embedding_profile(
 @router.delete("/api/me/embedding-profiles/{profile_id}")
 def api_delete_embedding_profile(
     profile_id: str,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     svc: EmbeddingProfileService = Depends(get_embedding_profile_service),
 ) -> JSONResponse:
-    svc.delete_profile(user["id"], profile_id)
+    svc.delete_profile(user.id, profile_id)
     return JSONResponse({"ok": True})

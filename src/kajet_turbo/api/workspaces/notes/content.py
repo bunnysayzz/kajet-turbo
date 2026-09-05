@@ -13,6 +13,7 @@ from kajet_turbo.api.schemas import (
 )
 from kajet_turbo.api.schemas.errors import ErrorResponse
 from kajet_turbo.dependencies import (
+    CurrentUser,
     get_note_service,
     get_required_user,
     resolve_note_target,
@@ -88,7 +89,7 @@ router = APIRouter(
 def api_get_note_html(
     name: str,
     note_id: str,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     target: NoteTarget = Depends(resolve_note_target),
     note_service: NoteService = Depends(get_note_service),
 ) -> JSONResponse:
@@ -107,9 +108,9 @@ def api_get_note_html(
             "period": note.period,
             "content_html": _render_html(
                 note.content,
-                resolver=note_service.link_resolver(name, user["id"], note.folder),
+                resolver=note_service.link_resolver(name, user.id, note.folder),
                 slug=name,
-                xws_resolver=note_service.xws_link_resolver(user["id"]),
+                xws_resolver=note_service.xws_link_resolver(user.id),
             ),
             "sha": note.sha,
         }
@@ -124,7 +125,7 @@ def api_get_note_html(
 def api_get_note_markdown(
     name: str,
     note_id: str,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     target: NoteTarget = Depends(resolve_note_target),
     note_service: NoteService = Depends(get_note_service),
 ) -> JSONResponse:
@@ -155,7 +156,7 @@ def api_get_note_markdown(
 def api_get_note_chunks(
     name: str,
     note_id: str,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     target: NoteTarget = Depends(resolve_note_target),
     note_service: NoteService = Depends(get_note_service),
 ) -> JSONResponse:
@@ -177,7 +178,7 @@ def api_get_note_chunks(
 def api_note_links(
     name: str,
     note_id: str,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     target: NoteTarget = Depends(resolve_note_target),
     note_service: NoteService = Depends(get_note_service),
 ) -> JSONResponse:
@@ -197,7 +198,7 @@ def api_note_neighborhood(
     note_id: str,
     depth: Annotated[int, Query(ge=1, le=3)] = 2,
     include_cross_workspace: bool = False,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     target: NoteTarget = Depends(resolve_note_target),
     note_service: NoteService = Depends(get_note_service),
 ) -> JSONResponse:
@@ -219,7 +220,7 @@ def api_note_neighborhood(
 )
 def api_note_graph(
     name: str,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     workspace: WorkspaceTarget = Depends(resolve_workspace_target),
     note_service: NoteService = Depends(get_note_service),
 ) -> JSONResponse:

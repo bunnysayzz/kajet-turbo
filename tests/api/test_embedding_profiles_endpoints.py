@@ -1,13 +1,13 @@
-from fastapi import FastAPI
 from sqlmodel import Session
 from starlette.testclient import TestClient
 
 from kajet_turbo.api.embedding import router
 from kajet_turbo.crypto import cipher_for
-from kajet_turbo.dependencies import get_embedding_profile_service, get_required_user
+from kajet_turbo.dependencies import CurrentUser, get_embedding_profile_service, get_required_user
 from kajet_turbo.models import User
 from kajet_turbo.repositories.embedding_profiles import EmbeddingProfileRepository
 from kajet_turbo.services.embedding_profiles import EmbeddingProfileService
+from tests.api.conftest import build_test_app
 
 
 def _app(database, monkeypatch, *, user_id="u1", probe_dim=3, probe_error=None):
@@ -26,11 +26,12 @@ def _app(database, monkeypatch, *, user_id="u1", probe_dim=3, probe_error=None):
         cipher_factory=lambda: cipher_for("embedding", secret="server-secret"),
         probe_dim=probe,
     )
-    app = FastAPI()
-    app.include_router(router)
+    app = build_test_app(routers=(router,))
     app.dependency_overrides[get_embedding_profile_service] = lambda: svc
     if user_id:
-        app.dependency_overrides[get_required_user] = lambda: {"id": user_id}
+        app.dependency_overrides[get_required_user] = lambda: CurrentUser(
+            id=user_id, email="", timezone="", locale=""
+        )
     return TestClient(app), svc
 
 
@@ -55,10 +56,11 @@ def test_create_with_asyncio_probe_offloads_to_thread(database, monkeypatch):
         cipher_factory=lambda: cipher_for("embedding", secret="server-secret"),
         probe_dim=asyncio_probe,
     )
-    app = FastAPI()
-    app.include_router(router)
+    app = build_test_app(routers=(router,))
     app.dependency_overrides[get_embedding_profile_service] = lambda: svc
-    app.dependency_overrides[get_required_user] = lambda: {"id": "u1"}
+    app.dependency_overrides[get_required_user] = lambda: CurrentUser(
+        id="u1", email="", timezone="", locale=""
+    )
     client = TestClient(app)
     r = client.post(
         "/api/me/embedding-profiles",

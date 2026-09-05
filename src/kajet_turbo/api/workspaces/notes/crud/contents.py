@@ -6,7 +6,12 @@ from fastapi.responses import JSONResponse
 from kajet_turbo.api.schemas import WorkspaceContentsResponse
 from kajet_turbo.api.schemas.errors import ErrorResponse
 from kajet_turbo.api.workspaces.notes._views import enrich_note_items
-from kajet_turbo.dependencies import get_note_service, get_required_user, resolve_workspace_target
+from kajet_turbo.dependencies import (
+    CurrentUser,
+    get_note_service,
+    get_required_user,
+    resolve_workspace_target,
+)
 from kajet_turbo.errors import FolderError
 from kajet_turbo.services.notes import NoteService
 from kajet_turbo.services.targets import WorkspaceTarget
@@ -41,7 +46,7 @@ def _child_folders(folders: list[str], parent: str) -> list[str]:
 )
 def api_workspace_contents(
     name: str,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     workspace: WorkspaceTarget = Depends(resolve_workspace_target),
     note_service: NoteService = Depends(get_note_service),
     path: str = "",
@@ -73,7 +78,7 @@ def api_workspace_contents(
             raise HTTPException(status_code=400, detail=FolderError.PATH_INVALID) from None
         if parent.is_dir():
             folder_path = relative_folder(ws_root, parent)
-            note = note_service.get(candidate_note_id, owner_id=user["id"])
+            note = note_service.get(candidate_note_id, owner_id=user.id)
             if note is not None and note["workspace"] == name and note["folder"] == folder_path:
                 resolution = "note"
                 selected_note_id = candidate_note_id

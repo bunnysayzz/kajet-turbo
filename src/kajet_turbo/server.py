@@ -5,14 +5,13 @@ from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 from fastmcp.utilities.lifespan import combine_lifespans
 from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.requests import Request as StarletteRequest
 
 from kajet_turbo.api import api_router
+from kajet_turbo.api.errors import install_error_handlers
 from kajet_turbo.auth import hash_password
 from kajet_turbo.dependencies import AppConfig, AppResources, build_resources
 from kajet_turbo.health import add_health_routes
@@ -222,12 +221,6 @@ def _mount_spa(app: FastAPI, resources: AppResources) -> None:
         app.mount("/", _SPAFiles(str(dist)))
 
 
-async def _http_exception_handler(request: StarletteRequest, exc: HTTPException) -> JSONResponse:
-    if isinstance(exc.detail, dict):
-        return JSONResponse(status_code=exc.status_code, content=exc.detail)
-    return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
-
-
 def _assemble(config: AppConfig | None) -> AppResources:
     return build_resources(config or AppConfig.from_env())
 
@@ -270,7 +263,7 @@ def build_api_app(config: AppConfig | None = None) -> Any:
     resources = _assemble(config)
     with _assembling(resources):
         app = FastAPI(lifespan=combine_lifespans(_app_lifespan, _logging_lifespan))
-    app.add_exception_handler(HTTPException, _http_exception_handler)  # ty: ignore[invalid-argument-type] — FastAPI accepts narrower exc type at runtime
+    install_error_handlers(app)
     _wire(app, resources)
     app.include_router(api_router)
     _mount_spa(app, resources)
@@ -291,7 +284,7 @@ def build_app(config: AppConfig | None = None) -> Any:
                 _worker_lifespan,
             )
         )
-    app.add_exception_handler(HTTPException, _http_exception_handler)  # ty: ignore[invalid-argument-type] — FastAPI accepts narrower exc type at runtime
+    install_error_handlers(app)
     _wire(app, resources)
     app.include_router(api_router)
     app.mount("/mcp", mcp_app)

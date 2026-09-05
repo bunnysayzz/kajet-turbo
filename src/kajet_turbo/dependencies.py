@@ -398,6 +398,18 @@ def get_provider(request: Request) -> KajetOAuthProvider:
     return _resources(request).provider
 
 
+@dataclass(frozen=True, slots=True)
+class CurrentUser:
+    """Narrow, typed identity for REST handlers -- carries only what routes read.
+    Built at the HTTP boundary from the session dict; `identity.py`/`get_session_user`
+    keep returning `dict` since MCP's context wiring consumes that shape directly."""
+
+    id: str
+    email: str
+    timezone: str
+    locale: str
+
+
 def get_session_user(request: Request) -> dict | None:
     try:
         session_repo = _resources(request).session_repo
@@ -408,26 +420,28 @@ def get_session_user(request: Request) -> dict | None:
     return identity.resolve_session_user_from_cookies(session_repo, request.cookies)
 
 
-def get_required_user(request: Request) -> dict:
+def get_required_user(request: Request) -> CurrentUser:
     user = get_session_user(request)
     if not user:
         raise HTTPException(status_code=401, detail=AuthError.NOT_AUTHENTICATED)
-    return user
+    return CurrentUser(
+        id=user["id"], email=user["email"], timezone=user["timezone"], locale=user["locale"]
+    )
 
 
 def resolve_workspace_target(
     name: str,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     resolver: TargetResolver = Depends(get_target_resolver),
 ) -> WorkspaceTarget:
     try:
-        return resolver.workspace(user["id"], name)
+        return resolver.workspace(user.id, name)
     except TargetResolutionError as e:
         audit_denied(
             e.failure,
             action="workspace.read",
             resource="workspace",
-            caller_id=user["id"],
+            caller_id=user.id,
             workspace=name,
         )
         raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED) from e
@@ -438,7 +452,7 @@ def resolve_note_target(
     note_id: str,
     ws: WorkspaceTarget = Depends(resolve_workspace_target),
     resolver: TargetResolver = Depends(get_target_resolver),
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
 ) -> NoteTarget:
     """404 before file access: order is fixed by the contract -- 401 (get_required_user)
     -> 403 on URL-workspace access (resolve_workspace_target) -> 404 on note not-found-
@@ -446,13 +460,13 @@ def resolve_note_target(
     fix for the bug this resolver exists for: a note_id from workspace A must not be
     reachable through workspace B's URL just because both belong to the same user."""
     try:
-        target = resolver.note(user["id"], note_id)
+        target = resolver.note(user.id, note_id)
     except TargetResolutionError as e:
         audit_denied(
             e.failure,
             action="note.read",
             resource="note",
-            caller_id=user["id"],
+            caller_id=user.id,
             note_id=note_id,
             workspace=name,
         )
@@ -461,7 +475,7 @@ def resolve_note_target(
         log_permission_denied(
             action="note.read",
             resource="note",
-            caller_id=user["id"],
+            caller_id=user.id,
             reason=DenialReason.WORKSPACE_MISMATCH,
             note_id=note_id,
             workspace=name,

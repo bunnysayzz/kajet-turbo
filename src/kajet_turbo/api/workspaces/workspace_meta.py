@@ -9,7 +9,7 @@ from kajet_turbo.api.schemas import (
 )
 from kajet_turbo.api.schemas.errors import ErrorResponse
 from kajet_turbo.concurrency import run_sync
-from kajet_turbo.dependencies import get_required_user, get_workspace_service
+from kajet_turbo.dependencies import CurrentUser, get_required_user, get_workspace_service
 from kajet_turbo.errors import AuthError, WorkspaceError
 from kajet_turbo.services.workspaces import WorkspaceService
 
@@ -23,10 +23,10 @@ router = APIRouter(
 
 @router.get("/api/workspaces", response_model=WorkspacesListResponse)
 def api_list_workspaces(
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     ws_service: WorkspaceService = Depends(get_workspace_service),
 ) -> JSONResponse:
-    return JSONResponse({"workspaces": ws_service.list_with_details(user["id"])})
+    return JSONResponse({"workspaces": ws_service.list_with_details(user.id)})
 
 
 @router.post(
@@ -37,7 +37,7 @@ def api_list_workspaces(
 )
 async def api_create_workspace(
     request: Request,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     ws_service: WorkspaceService = Depends(get_workspace_service),
 ) -> JSONResponse:
     try:
@@ -51,14 +51,14 @@ async def api_create_workspace(
     folder = body.get("folder")
     tags = body.get("tags")
     try:
-        await run_sync(ws_service.create, name, user["id"], description=description)
+        await run_sync(ws_service.create, name, user.id, description=description)
     except ValueError, FileExistsError:
         raise HTTPException(status_code=409, detail=WorkspaceError.ALREADY_EXISTS) from None
     if folder is not None or tags is not None:
         try:
             await run_sync(
                 ws_service.set_meta,
-                user["id"],
+                user.id,
                 name,
                 folder=folder if isinstance(folder, str) else None,
                 tags=tags if isinstance(tags, list) else None,
@@ -76,10 +76,10 @@ async def api_create_workspace(
 async def api_update_workspace(
     name: str,
     request: Request,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     ws_service: WorkspaceService = Depends(get_workspace_service),
 ) -> JSONResponse:
-    if not await run_sync(ws_service.has_access, user["id"], name):
+    if not await run_sync(ws_service.has_access, user.id, name):
         raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED)
     try:
         body = await request.json()
@@ -91,7 +91,7 @@ async def api_update_workspace(
     try:
         result = await run_sync(
             ws_service.set_meta,
-            user["id"],
+            user.id,
             name,
             description=description if isinstance(description, str) else None,
             folder=folder if isinstance(folder, str) else None,
@@ -108,10 +108,10 @@ async def api_update_workspace(
 )
 async def api_delete_workspace(
     name: str,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     ws_service: WorkspaceService = Depends(get_workspace_service),
 ) -> JSONResponse:
-    if not await run_sync(ws_service.has_access, user["id"], name):
+    if not await run_sync(ws_service.has_access, user.id, name):
         raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED)
-    await run_sync(ws_service.delete, user["id"], name)
+    await run_sync(ws_service.delete, user.id, name)
     return JSONResponse({"name": name})

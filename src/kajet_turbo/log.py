@@ -362,6 +362,10 @@ class LoggingMiddleware:
         request = Request(scope)
         is_health_path = request.url.path in _HEALTH_PATHS
         request_id = str(uuid.uuid4())[:8]
+        # Exposed on request.state (not just loguru's contextualize) so app-level
+        # exception handlers can attach it to a diagnostic log independently of the
+        # logging context stack.
+        scope.setdefault("state", {})["request_id"] = request_id
         # Mcp-Session-Id lets us correlate every line of an MCP request to its
         # session — without it, diagnosing "state not held across calls" means
         # hand-correlating timestamps. None for non-MCP (web/API) requests.

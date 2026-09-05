@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from kajet_turbo.api.schemas import UserPreferences
 from kajet_turbo.api.schemas.errors import ErrorResponse
 from kajet_turbo.concurrency import run_sync
-from kajet_turbo.dependencies import get_preferences_service, get_required_user
+from kajet_turbo.dependencies import CurrentUser, get_preferences_service, get_required_user
 from kajet_turbo.errors import PreferencesError
 from kajet_turbo.services.preferences import PreferencesService
 
@@ -13,10 +13,10 @@ router = APIRouter(responses={401: {"model": ErrorResponse}})
 
 @router.get("/api/me/preferences", response_model=UserPreferences)
 def api_get_preferences(
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     svc: PreferencesService = Depends(get_preferences_service),
 ) -> JSONResponse:
-    return JSONResponse(svc.get_preferences(user["id"]).model_dump())
+    return JSONResponse(svc.get_preferences(user.id).model_dump())
 
 
 @router.patch(
@@ -26,7 +26,7 @@ def api_get_preferences(
 )
 async def api_update_preferences(
     request: Request,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     svc: PreferencesService = Depends(get_preferences_service),
 ) -> JSONResponse:
     try:
@@ -45,7 +45,7 @@ async def api_update_preferences(
             updates[key] = value
 
     try:
-        prefs = await run_sync(svc.update_preferences, user["id"], **updates)
+        prefs = await run_sync(svc.update_preferences, user.id, **updates)
     except ValueError:
         raise HTTPException(status_code=422, detail=PreferencesError.INVALID_INPUT) from None
     return JSONResponse(prefs.model_dump())

@@ -1,13 +1,13 @@
-from fastapi import FastAPI
 from sqlmodel import Session
 from starlette.testclient import TestClient
 
 from kajet_turbo.api.ssh_keys import router
 from kajet_turbo.crypto import cipher_for
-from kajet_turbo.dependencies import get_required_user, get_ssh_key_service
+from kajet_turbo.dependencies import CurrentUser, get_required_user, get_ssh_key_service
 from kajet_turbo.models import User
 from kajet_turbo.repositories.ssh_keys import SshKeyRepository
 from kajet_turbo.services.ssh_keys import SshKeyService
+from tests.api.conftest import build_test_app
 
 
 def _app(database, monkeypatch, *, user_id="u1"):
@@ -19,11 +19,12 @@ def _app(database, monkeypatch, *, user_id="u1"):
         SshKeyRepository(database.engine),
         cipher_factory=lambda: cipher_for("ssh-key", secret="server-secret"),
     )
-    app = FastAPI()
-    app.include_router(router)
+    app = build_test_app(routers=(router,))
     app.dependency_overrides[get_ssh_key_service] = lambda: svc
     if user_id:
-        app.dependency_overrides[get_required_user] = lambda: {"id": user_id}
+        app.dependency_overrides[get_required_user] = lambda: CurrentUser(
+            id=user_id, email="", timezone="", locale=""
+        )
     return TestClient(app)
 
 

@@ -1,11 +1,11 @@
 import time
 
-from fastapi import FastAPI
 from starlette.testclient import TestClient
 
 from kajet_turbo.api.auth import router
 from kajet_turbo.auth import DUMMY_PASSWORD_HASH, hash_password
 from kajet_turbo.dependencies import (
+    CurrentUser,
     get_oauth_repo,
     get_provider,
     get_required_user,
@@ -15,32 +15,31 @@ from kajet_turbo.dependencies import (
 from kajet_turbo.repositories.oauth import OAuthRepository
 from kajet_turbo.repositories.sessions import SessionRepository
 from kajet_turbo.repositories.users import UserRepository
+from tests.api.conftest import build_test_app
 
 
 def _client(database, *, user_id: str | None = None):
     users = UserRepository(database.engine)
     sessions = SessionRepository(database.engine)
     oauth = OAuthRepository(database.engine)
-    app = FastAPI()
-    app.include_router(router)
+    app = build_test_app(routers=(router,))
     app.dependency_overrides[get_user_repo] = lambda: users
     app.dependency_overrides[get_session_repo] = lambda: sessions
     app.dependency_overrides[get_oauth_repo] = lambda: oauth
     app.dependency_overrides[get_provider] = object
     if user_id is not None:
-        app.dependency_overrides[get_required_user] = lambda: {"id": user_id, "email": "u@test"}
+        app.dependency_overrides[get_required_user] = lambda: CurrentUser(
+            id=user_id, email="u@test", timezone="", locale=""
+        )
     return TestClient(app), users, sessions, oauth
 
 
 def test_session_get_includes_preferences(database):
     client, users, _sessions, _oauth = _client(database)
     user_id = users.create("pref@example.com", hash_password("password"))
-    client.app.dependency_overrides[get_required_user] = lambda: {
-        "id": user_id,
-        "email": "pref@example.com",
-        "timezone": "Europe/Warsaw",
-        "locale": "pl",
-    }
+    client.app.dependency_overrides[get_required_user] = lambda: CurrentUser(
+        id=user_id, email="pref@example.com", timezone="Europe/Warsaw", locale="pl"
+    )
 
     response = client.get("/api/session")
 
@@ -72,10 +71,9 @@ def test_logout_everywhere_deletes_only_current_users_credentials(database):
     client, users, sessions, oauth = _client(database)
     user_1 = users.create("one@example.com", hash_password("password"))
     user_2 = users.create("two@example.com", hash_password("password"))
-    client.app.dependency_overrides[get_required_user] = lambda: {
-        "id": user_1,
-        "email": "one@example.com",
-    }
+    client.app.dependency_overrides[get_required_user] = lambda: CurrentUser(
+        id=user_1, email="one@example.com", timezone="", locale=""
+    )
     session_1a = sessions.create(user_1)
     session_1b = sessions.create(user_1)
     session_2 = sessions.create(user_2)

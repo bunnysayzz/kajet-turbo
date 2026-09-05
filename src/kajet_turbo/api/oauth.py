@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 
 from kajet_turbo.api.schemas import ConsentResponse, PendingInfoResponse
 from kajet_turbo.concurrency import run_sync
-from kajet_turbo.dependencies import get_provider, get_required_user
+from kajet_turbo.dependencies import CurrentUser, get_provider, get_required_user
 
 router = APIRouter()
 
@@ -11,7 +11,7 @@ router = APIRouter()
 @router.post("/api/consent", response_model=ConsentResponse)
 async def api_consent(
     request: Request,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     provider=Depends(get_provider),
 ) -> Response:
     try:
@@ -22,7 +22,7 @@ async def api_consent(
     if not pending_id:
         return JSONResponse({"error": "Wygasły pending_id."}, status_code=400)
     try:
-        redirect_uri = await provider.complete_authorization(pending_id, user["id"])
+        redirect_uri = await provider.complete_authorization(pending_id, user.id)
     except ValueError:
         return JSONResponse({"error": "Wygasły pending_id."}, status_code=400)
     return JSONResponse({"redirect_uri": redirect_uri})

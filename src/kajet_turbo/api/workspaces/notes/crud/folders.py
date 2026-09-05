@@ -11,7 +11,12 @@ from kajet_turbo.api.schemas import (
 )
 from kajet_turbo.api.schemas.errors import ErrorResponse
 from kajet_turbo.concurrency import run_sync
-from kajet_turbo.dependencies import get_folder_meta_repo, get_required_user, get_workspace_service
+from kajet_turbo.dependencies import (
+    CurrentUser,
+    get_folder_meta_repo,
+    get_required_user,
+    get_workspace_service,
+)
 from kajet_turbo.errors import AuthError, FolderError
 from kajet_turbo.log import logger
 from kajet_turbo.repositories.folder_meta import FolderMetaRepository
@@ -54,10 +59,10 @@ def _create_folder_marker(ws_path: str, path: str) -> None:
 async def api_create_folder(
     name: str,
     request: Request,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     ws_service: WorkspaceService = Depends(get_workspace_service),
 ) -> JSONResponse:
-    if not ws_service.has_access(user["id"], name):
+    if not await run_sync(ws_service.has_access, user.id, name):
         raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED)
     try:
         body = await request.json()
@@ -71,7 +76,7 @@ async def api_create_folder(
         raise HTTPException(status_code=422, detail=FolderError.PATH_INVALID)
     if not _FOLDER_PATH_RE.match(path):
         raise HTTPException(status_code=422, detail=FolderError.PATH_INVALID)
-    ws_path = ws_service.workspace_path(user["id"], name)
+    ws_path = ws_service.workspace_path(user.id, name)
     ws_root = Path(ws_path).resolve()
     target = (ws_root / path).resolve()
     try:
@@ -93,14 +98,14 @@ async def api_create_folder(
 async def api_get_folder_meta(
     name: str,
     path: str,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     ws_service: WorkspaceService = Depends(get_workspace_service),
     meta_repo: FolderMetaRepository = Depends(get_folder_meta_repo),
 ) -> FolderMetaResponse:
-    if not ws_service.has_access(user["id"], name):
+    if not await run_sync(ws_service.has_access, user.id, name):
         raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED)
     norm = normalize_folder(path)
-    row = await run_sync(meta_repo.get, user["id"], name, norm)
+    row = await run_sync(meta_repo.get, user.id, name, norm)
     return FolderMetaResponse(
         path=norm,
         description=row.description if row else "",
@@ -116,16 +121,16 @@ async def api_update_folder_meta(
     name: str,
     path: str,
     body: UpdateFolderMetaRequest,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     ws_service: WorkspaceService = Depends(get_workspace_service),
     meta_repo: FolderMetaRepository = Depends(get_folder_meta_repo),
 ) -> FolderMetaResponse:
-    if not ws_service.has_access(user["id"], name):
+    if not await run_sync(ws_service.has_access, user.id, name):
         raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED)
     norm = normalize_folder(path)
     await run_sync(
         meta_repo.set,
-        user["id"],
+        user.id,
         name,
         norm,
         description=body.description,
