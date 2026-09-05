@@ -5,13 +5,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
 
+import pytest
 from loki_source import (
+    LokiConfigError,
+    SshTarget,
     _to_unix_ns,
     _warn_if_capped,
     _warn_if_stale,
     build_selector,
     parse_query_range_response,
 )
+
+SSH_ENV = ("KAJET_LOG_SSH_HOST", "KAJET_LOG_SSH_USER", "KAJET_LOG_SSH_KEY")
 
 
 def test_build_selector_base():
@@ -171,3 +176,51 @@ def test_warn_if_stale_silent_on_unparseable_ts(capsys):
     """A malformed ts is the line parser's problem, not a staleness signal."""
     _warn_if_stale([{"ts": "not a timestamp"}, {"msg": "no ts at all"}], "now")
     assert capsys.readouterr().err == ""
+
+
+def _set_ssh_env(monkeypatch, **overrides: str | None) -> None:
+    """Set the three SSH variables, with `None` meaning "unset this one"."""
+    values = {"KAJET_LOG_SSH_HOST": "logs.example", "KAJET_LOG_SSH_USER": "reader"}
+    values["KAJET_LOG_SSH_KEY"] = "/keys/reader"
+    values.update(overrides)
+    for var in SSH_ENV:
+        value = values[var]
+        if value is None:
+            monkeypatch.delenv(var, raising=False)
+        else:
+            monkeypatch.setenv(var, value)
+
+
+def test_ssh_target_from_env_reads_all_three(monkeypatch):
+    _set_ssh_env(monkeypatch)
+    assert SshTarget.from_env() == SshTarget(host="logs.example", user="reader", key="/keys/reader")
+
+
+def test_ssh_target_from_env_names_the_single_missing_variable(monkeypatch):
+    _set_ssh_env(monkeypatch, KAJET_LOG_SSH_USER=None)
+    with pytest.raises(LokiConfigError) as excinfo:
+        SshTarget.from_env()
+    message = str(excinfo.value)
+    assert "KAJET_LOG_SSH_USER is unset" in message
+    assert "KAJET_LOG_SSH_HOST" not in message
+    assert "--source docker-logs" in message
+
+
+def test_ssh_target_from_env_names_every_missing_variable_at_once(monkeypatch):
+    """One failed run should report the whole gap, not the first hole in it."""
+    _set_ssh_env(monkeypatch, KAJET_LOG_SSH_HOST=None, KAJET_LOG_SSH_USER=None)
+    with pytest.raises(LokiConfigError) as excinfo:
+        SshTarget.from_env()
+    message = str(excinfo.value)
+    assert "KAJET_LOG_SSH_HOST, KAJET_LOG_SSH_USER are unset" in message
+
+
+def test_ssh_target_from_env_treats_blank_as_missing(monkeypatch):
+    _set_ssh_env(monkeypatch, KAJET_LOG_SSH_KEY="   ")
+    with pytest.raises(LokiConfigError, match="KAJET_LOG_SSH_KEY"):
+        SshTarget.from_env()
+
+
+def test_ssh_target_from_env_strips_surrounding_whitespace(monkeypatch):
+    _set_ssh_env(monkeypatch, KAJET_LOG_SSH_HOST=" logs.example\n")
+    assert SshTarget.from_env().host == "logs.example"
