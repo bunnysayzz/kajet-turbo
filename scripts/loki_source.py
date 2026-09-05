@@ -2,10 +2,12 @@
 
 Used by analyze-logs.py as the default event source.
 
-The tunnel's destination is read from the environment, never from a literal in this
-file: KAJET_LOG_SSH_HOST, KAJET_LOG_SSH_USER, and KAJET_LOG_SSH_KEY (path to the private
-key). All three are required; a missing one fails with a message naming it, before any
-connection is attempted. --source docker-logs needs none of them.
+The tunnel's destination is configuration, never a literal in this file:
+KAJET_LOG_SSH_HOST, KAJET_LOG_SSH_USER, and KAJET_LOG_SSH_KEY (path to the private key).
+Each is read from the process environment, falling back to a gitignored `.env` beside
+this repository — or to the file KAJET_LOG_ENV_FILE points at. All three are required; a
+missing one fails with a message naming it, before any connection is attempted.
+--source docker-logs needs none of them.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, fields
+from pathlib import Path
 from typing import Any
 
 _SSH_ENV = {
@@ -30,6 +33,11 @@ _SSH_ENV = {
     "user": "KAJET_LOG_SSH_USER",
     "key": "KAJET_LOG_SSH_KEY",
 }
+
+_ENV_FILE_VAR = "KAJET_LOG_ENV_FILE"
+# Resolved from this file, not the working directory: analyze-logs.py is run from
+# wherever the operator happens to be standing.
+_DEFAULT_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 LEVEL_ORDER = {"debug": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
 
@@ -116,13 +124,43 @@ class LokiConfigError(LokiError):
     pass
 
 
+def _env_file_path() -> Path:
+    override = os.environ.get(_ENV_FILE_VAR, "").strip()
+    return Path(override).expanduser() if override else _DEFAULT_ENV_FILE
+
+
+def _load_env_file(path: Path) -> dict[str, str]:
+    """``KEY=value`` pairs from a dotenv-style file; missing file means no pairs.
+
+    Deliberately minimal: comments, blank lines, an optional ``export`` prefix, and one
+    layer of surrounding quotes. No interpolation, no multi-line values, no export
+    semantics — anything richer belongs in a real settings library, and this file holds
+    three connection strings.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError, NotADirectoryError, IsADirectoryError, PermissionError:
+        return {}
+    values: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip().removeprefix("export ").lstrip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        values[key.strip()] = value
+    return values
+
+
 @dataclass(frozen=True, slots=True)
 class SshTarget:
-    """Where the tunnel connects, sourced entirely from the environment.
+    """Where the tunnel connects, sourced from configuration rather than source.
 
     Field names map to environment variables through ``_SSH_ENV``; keeping that mapping
-    in one place is what lets ``from_env`` report every missing variable at once instead
-    of one per failed run.
+    in one place is what lets ``from_env`` read both sources and report every missing
+    variable at once instead of one per failed run.
     """
 
     host: str
@@ -131,11 +169,15 @@ class SshTarget:
 
     @classmethod
     def from_env(cls) -> SshTarget:
+        """The process environment wins over the file, so a one-off override is a
+        prefixed variable rather than an edit to a file that outlives the run."""
+        env_file = _env_file_path()
+        from_file = _load_env_file(env_file)
         values: dict[str, str] = {}
         missing: list[str] = []
         for field in fields(cls):
             var = _SSH_ENV[field.name]
-            value = os.environ.get(var, "").strip()
+            value = (os.environ.get(var) or from_file.get(var, "")).strip()
             if value:
                 values[field.name] = value
             else:
@@ -143,9 +185,10 @@ class SshTarget:
         if missing:
             raise LokiConfigError(
                 f"Loki access is not configured: {', '.join(missing)} "
-                f"{'is' if len(missing) == 1 else 'are'} unset. Set "
-                f"{'it' if len(missing) == 1 else 'them'} to the log host, the SSH user, "
-                "and the private key path, or re-run with --source docker-logs."
+                f"{'is' if len(missing) == 1 else 'are'} unset in the environment and in "
+                f"{env_file}. Set {'it' if len(missing) == 1 else 'them'} to the log host, "
+                "the SSH user, and the private key path, or re-run with "
+                "--source docker-logs."
             )
         return cls(**values)
 
