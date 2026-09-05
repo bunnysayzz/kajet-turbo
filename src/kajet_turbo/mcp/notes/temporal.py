@@ -8,11 +8,13 @@ from kajet_turbo.mcp.context import WORKSPACE_TARGET
 from kajet_turbo.mcp.notes.types import NoteListItem
 from kajet_turbo.mcp.tooling import read_tool
 from kajet_turbo.services.collections import CollectionService
-from kajet_turbo.services.notes import NoteService
+from kajet_turbo.services.notes import NoteTemporalService
 from kajet_turbo.services.targets import WorkspaceTarget
 
 
-def build_temporal(note_service: NoteService, collection_service: CollectionService) -> FastMCP:
+def build_temporal(
+    note_temporal_service: NoteTemporalService, collection_service: CollectionService
+) -> FastMCP:
     srv = FastMCP("notes-temporal")
 
     @srv.tool(**read_tool(tags={"notes", "crud"}))
@@ -60,7 +62,7 @@ def build_temporal(note_service: NoteService, collection_service: CollectionServ
         if collection is not None:
             folder = await run_sync(collection_service.folder_prefix, str(target.path), collection)
         notes = await run_sync(
-            note_service.entries_in, target.name, target.owner_id, period, folder
+            note_temporal_service.entries_in, target.name, target.owner_id, period, folder
         )
         return [NoteListItem.model_validate(n) for n in notes]
 

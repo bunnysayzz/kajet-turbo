@@ -60,6 +60,7 @@ from kajet_turbo.services.notes import (
     NoteSearchService,
     NoteService,
     NoteTagService,
+    NoteTemporalService,
     NoteVersionService,
 )
 from kajet_turbo.services.push_enqueue import make_enqueue_push_on_commit
@@ -131,6 +132,7 @@ class AppResources:
     folder_meta_repo: FolderMetaRepository
     job_repo: JobRepository
     note_service: NoteService
+    note_temporal_service: NoteTemporalService
     workspace_service: WorkspaceService
     target_resolver: TargetResolver
     collection_service: CollectionService
@@ -261,6 +263,7 @@ def build_resources(config: AppConfig) -> AppResources:
             indexer=indexer,
             reconcile_repo=reconcile_repo,
         )
+        note_temporal_service = NoteTemporalService(note_repo)
         ssh_key_repo = SshKeyRepository(db.engine)
         ssh_key_service = SshKeyService(
             ssh_key_repo, lambda: cipher_for("ssh-key", config.secret_key)
@@ -307,6 +310,7 @@ def build_resources(config: AppConfig) -> AppResources:
             folder_meta_repo,
             job_repo,
             note_service,
+            note_temporal_service,
             workspace_service,
             TargetResolver(note_repo, workspace_service),
             CollectionService(note_repo, note_service),
@@ -368,6 +372,10 @@ def get_note_repo(request: Request) -> NoteRepository:
 
 def get_note_service(request: Request) -> NoteService:
     return _resources(request).note_service
+
+
+def get_note_temporal_service(request: Request) -> NoteTemporalService:
+    return _resources(request).note_temporal_service
 
 
 def get_workspace_service(request: Request) -> WorkspaceService:

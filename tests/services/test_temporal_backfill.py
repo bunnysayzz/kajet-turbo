@@ -12,16 +12,20 @@ def _rel(ws_path, filepath: str) -> str:
     return str(Path(filepath).relative_to(ws_path))
 
 
-def test_temporal_backfill_updates_metadata_without_bumping_index(service, workspace):
+def test_temporal_backfill_updates_metadata_without_bumping_index(
+    service, temporal_service, workspace
+):
     note_id = service.save(workspace_target("u1", "ws", workspace), "2026-03-22 Daily", "body", [])[
         "note_id"
     ]
     before = service._crud_repo.get(note_id, owner_id="u1")
     assert before is not None
-    preview = service.temporal_backfill_preview("ws", "u1", str(workspace))
+    preview = temporal_service.temporal_backfill_preview("ws", "u1", str(workspace))
     assert preview["candidates"][0]["field"] == "occurred_at"
 
-    result = service.apply_temporal_backfill("ws", "u1", str(workspace), preview["candidates"])
+    result = temporal_service.apply_temporal_backfill(
+        "ws", "u1", str(workspace), preview["candidates"]
+    )
 
     after = service._crud_repo.get(note_id, owner_id="u1")
     assert result == {"applied": 1}
@@ -31,13 +35,15 @@ def test_temporal_backfill_updates_metadata_without_bumping_index(service, works
     assert (meta.occurred_at, body) == ("2026-03-22", "body")
 
 
-def test_temporal_backfill_db_failure_leaves_file_row_and_head_untouched(service, workspace):
+def test_temporal_backfill_db_failure_leaves_file_row_and_head_untouched(
+    service, temporal_service, workspace
+):
     """#155: rows are written before the tree, so a DB-side failure must abort before the
     frontmatter rewrite or the git commit ever happen."""
     note_id = service.save(workspace_target("u1", "ws", workspace), "2026-03-22 Daily", "body", [])[
         "note_id"
     ]
-    preview = service.temporal_backfill_preview("ws", "u1", str(workspace))
+    preview = temporal_service.temporal_backfill_preview("ws", "u1", str(workspace))
     before = service._crud_repo.get(note_id, owner_id="u1")
     assert before is not None and before.occurred_at is None
     head_before = head_sha(workspace, "2026-03-22 Daily.md")
@@ -48,7 +54,7 @@ def test_temporal_backfill_db_failure_leaves_file_row_and_head_untouched(service
         patch.object(service._crud_repo, "update_in_session", flaky_update),
         pytest.raises(RuntimeError, match="db exploded"),
     ):
-        service.apply_temporal_backfill("ws", "u1", str(workspace), preview["candidates"])
+        temporal_service.apply_temporal_backfill("ws", "u1", str(workspace), preview["candidates"])
 
     after = service._crud_repo.get(note_id, owner_id="u1")
     assert after is not None and after.occurred_at is None
@@ -57,7 +63,7 @@ def test_temporal_backfill_db_failure_leaves_file_row_and_head_untouched(service
     assert (meta.occurred_at, body) == (None, "body")
 
 
-def test_temporal_backfill_git_error_rolls_back_row_and_file(service, workspace):
+def test_temporal_backfill_git_error_rolls_back_row_and_file(service, temporal_service, workspace):
     """#155: the row update is flushed before the git commit inside the same
     transaction, so a git-side failure must roll the already-flushed row back too, not
     just leave the frontmatter untouched."""
@@ -66,7 +72,7 @@ def test_temporal_backfill_git_error_rolls_back_row_and_file(service, workspace)
     note_id = service.save(workspace_target("u1", "ws", workspace), "2026-03-22 Daily", "body", [])[
         "note_id"
     ]
-    preview = service.temporal_backfill_preview("ws", "u1", str(workspace))
+    preview = temporal_service.temporal_backfill_preview("ws", "u1", str(workspace))
     head_before = head_sha(workspace, "2026-03-22 Daily.md")
 
     with (
@@ -76,7 +82,7 @@ def test_temporal_backfill_git_error_rolls_back_row_and_file(service, workspace)
         ),
         pytest.raises(GitError),
     ):
-        service.apply_temporal_backfill("ws", "u1", str(workspace), preview["candidates"])
+        temporal_service.apply_temporal_backfill("ws", "u1", str(workspace), preview["candidates"])
 
     after = service._crud_repo.get(note_id, owner_id="u1")
     assert after is not None and after.occurred_at is None
@@ -85,7 +91,7 @@ def test_temporal_backfill_git_error_rolls_back_row_and_file(service, workspace)
     assert (meta.occurred_at, body) == (None, "body")
 
 
-def test_temporal_backfill_reports_conflicting_folder(service, workspace):
+def test_temporal_backfill_reports_conflicting_folder(service, temporal_service, workspace):
     service.save(
         workspace_target("u1", "ws", workspace),
         "2026-03-22",
@@ -93,12 +99,12 @@ def test_temporal_backfill_reports_conflicting_folder(service, workspace):
         [],
         folder="journal/2026/04",
     )
-    preview = service.temporal_backfill_preview("ws", "u1", str(workspace))
+    preview = temporal_service.temporal_backfill_preview("ws", "u1", str(workspace))
     assert preview["candidates"] == []
     assert preview["ambiguous"][0]["reason"] == "folder date conflicts with title"
 
 
-def test_temporal_backfill_reports_conflicting_week_folder(service, workspace):
+def test_temporal_backfill_reports_conflicting_week_folder(service, temporal_service, workspace):
     # ISO week 2026-W12 falls in March (month_of_week), so a folder claiming April
     # is a genuine conflict a day/month-only check would miss for week-grain titles.
     service.save(
@@ -108,12 +114,14 @@ def test_temporal_backfill_reports_conflicting_week_folder(service, workspace):
         [],
         folder="weekly/2026/04",
     )
-    preview = service.temporal_backfill_preview("ws", "u1", str(workspace))
+    preview = temporal_service.temporal_backfill_preview("ws", "u1", str(workspace))
     assert preview["candidates"] == []
     assert preview["ambiguous"][0]["reason"] == "folder date conflicts with title"
 
 
-def test_temporal_backfill_applies_note_with_no_git_history(service, workspace, note_file_factory):
+def test_temporal_backfill_applies_note_with_no_git_history(
+    service, temporal_service, workspace, note_file_factory
+):
     # A file reconciled onto disk (e.g. pre-existing data) has no commit touching it yet,
     # so its preview candidate carries sha=None; apply must still accept it as fresh.
     path = note_file_factory(workspace, "2026-03-22 Daily", note_id="nogit1", content="body")
@@ -121,25 +129,29 @@ def test_temporal_backfill_applies_note_with_no_git_history(service, workspace, 
         "ws", owner_id="u1", ws_path=str(workspace), paths=[_rel(workspace, path)]
     )
 
-    preview = service.temporal_backfill_preview("ws", "u1", str(workspace))
+    preview = temporal_service.temporal_backfill_preview("ws", "u1", str(workspace))
     assert preview["candidates"][0]["sha"] is None
 
-    result = service.apply_temporal_backfill("ws", "u1", str(workspace), preview["candidates"])
+    result = temporal_service.apply_temporal_backfill(
+        "ws", "u1", str(workspace), preview["candidates"]
+    )
 
     assert result == {"applied": 1}
     after = service._crud_repo.get("nogit1", owner_id="u1")
     assert after is not None and after.occurred_at == "2026-03-22"
 
 
-def test_temporal_backfill_rejects_malformed_note_id_without_writing(service, workspace):
+def test_temporal_backfill_rejects_malformed_note_id_without_writing(
+    service, temporal_service, workspace
+):
     note_id = service.save(workspace_target("u1", "ws", workspace), "2026-03-22 Daily", "body", [])[
         "note_id"
     ]
-    preview = service.temporal_backfill_preview("ws", "u1", str(workspace))
+    preview = temporal_service.temporal_backfill_preview("ws", "u1", str(workspace))
     candidate = {**preview["candidates"][0], "note_id": None}
 
     with pytest.raises(ValueError, match="note_id"):
-        service.apply_temporal_backfill("ws", "u1", str(workspace), [candidate])
+        temporal_service.apply_temporal_backfill("ws", "u1", str(workspace), [candidate])
 
     after = service._crud_repo.get(note_id, owner_id="u1")
     assert after is not None and after.occurred_at is None

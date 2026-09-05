@@ -27,6 +27,7 @@ from kajet_turbo.services.notes import (
     NoteSearchService,
     NoteService,
     NoteTagService,
+    NoteTemporalService,
     NoteVersionService,
 )
 from kajet_turbo.services.targets import NoteTarget, WorkspaceTarget
@@ -139,6 +140,13 @@ def service(database: Database) -> NoteService:
         jobs=JobRepository(database.engine),
     )
     return build_note_service(database, indexer=indexer)
+
+
+@pytest.fixture
+def temporal_service(service: NoteService) -> NoteTemporalService:
+    """Shares `service`'s NoteRepository instance, not a fresh one, so a test that
+    patches a method on `service._crud_repo` also affects backfill calls made here."""
+    return NoteTemporalService(service._crud_repo)
 
 
 def workspace_target(owner_id: str, name: str, path) -> WorkspaceTarget:

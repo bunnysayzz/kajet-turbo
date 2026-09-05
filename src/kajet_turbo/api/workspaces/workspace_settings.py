@@ -13,12 +13,12 @@ from kajet_turbo.api.schemas.errors import ErrorResponse
 from kajet_turbo.concurrency import run_sync
 from kajet_turbo.dependencies import (
     CurrentUser,
-    get_note_service,
+    get_note_temporal_service,
     get_required_user,
     get_workspace_service,
 )
 from kajet_turbo.errors import AuthError, WorkspaceError
-from kajet_turbo.services.notes import NoteService
+from kajet_turbo.services.notes import NoteTemporalService
 from kajet_turbo.services.workspaces import WorkspaceService
 
 router = APIRouter(
@@ -80,12 +80,12 @@ async def api_temporal_backfill_preview(
     name: str,
     user: CurrentUser = Depends(get_required_user),
     ws_service: WorkspaceService = Depends(get_workspace_service),
-    note_service: NoteService = Depends(get_note_service),
+    note_temporal_service: NoteTemporalService = Depends(get_note_temporal_service),
 ) -> JSONResponse:
     if not await run_sync(ws_service.has_access, user.id, name):
         raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED)
     result = await run_sync(
-        note_service.temporal_backfill_preview,
+        note_temporal_service.temporal_backfill_preview,
         name,
         user.id,
         ws_service.workspace_path(user.id, name),
@@ -103,13 +103,13 @@ async def api_apply_temporal_backfill(
     body: ApplyTemporalBackfillRequest,
     user: CurrentUser = Depends(get_required_user),
     ws_service: WorkspaceService = Depends(get_workspace_service),
-    note_service: NoteService = Depends(get_note_service),
+    note_temporal_service: NoteTemporalService = Depends(get_note_temporal_service),
 ) -> JSONResponse:
     if not await run_sync(ws_service.has_access, user.id, name):
         raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED)
     try:
         result = await run_sync(
-            note_service.apply_temporal_backfill,
+            note_temporal_service.apply_temporal_backfill,
             name,
             user.id,
             ws_service.workspace_path(user.id, name),

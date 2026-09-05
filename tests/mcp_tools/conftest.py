@@ -20,7 +20,7 @@ from kajet_turbo.repositories.workspace_meta import WorkspaceMetaRepository
 from kajet_turbo.repositories.workspaces import WorkspaceRepository
 from kajet_turbo.services.collections import CollectionService
 from kajet_turbo.services.indexing import NoteIndexer
-from kajet_turbo.services.notes import NoteService
+from kajet_turbo.services.notes import NoteService, NoteTemporalService
 from kajet_turbo.services.targets import TargetResolver
 from kajet_turbo.services.workspaces import WorkspaceService
 
@@ -65,6 +65,7 @@ def _build_context(database: Database, monkeypatch: pytest.MonkeyPatch) -> McpTe
     note_service_inst = build_note_service(
         database, indexer=indexer, chunk_repo=note_chunk_repository
     )
+    note_temporal_service_inst = NoteTemporalService(note_repository)
     workspace_service = WorkspaceService(
         workspace_repository,
         note_repository,
@@ -79,6 +80,7 @@ def _build_context(database: Database, monkeypatch: pytest.MonkeyPatch) -> McpTe
     # so isolated MCP tool tests don't need a full application resource graph.
     resources = SimpleNamespace(
         note_service=note_service_inst,
+        note_temporal_service=note_temporal_service_inst,
         workspace_service=workspace_service,
         target_resolver=TargetResolver(note_repository, workspace_service),
         folder_meta_repo=folder_meta_repository,
