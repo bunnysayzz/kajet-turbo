@@ -1,7 +1,13 @@
-"""Query kajet-turbo logs from Loki (niechybnie, loopback-only port 3100 via SSH tunnel).
+"""Query kajet-turbo logs from Loki (loopback-only port 3100, reached over an SSH tunnel).
 
-Used by analyze-logs.py as the default event source. See
-docs/superpowers/specs/2026-07-19-loki-log-tooling-design.md for the design.
+Used by analyze-logs.py as the default event source.
+
+The tunnel's destination is configuration, never a literal in this file:
+KAJET_LOG_SSH_HOST, KAJET_LOG_SSH_USER, and KAJET_LOG_SSH_KEY (path to the private key).
+Each is read from the process environment, falling back to a gitignored `.env` beside
+this repository — or to the file KAJET_LOG_ENV_FILE points at. All three are required; a
+missing one fails with a message naming it, before any connection is attempted.
+--source docker-logs needs none of them.
 """
 
 from __future__ import annotations
@@ -9,6 +15,7 @@ from __future__ import annotations
 import atexit
 import datetime
 import json
+import os
 import signal
 import socket
 import subprocess
@@ -17,11 +24,20 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass, fields
+from pathlib import Path
 from typing import Any
 
-SSH_HOST = "178.104.253.119"
-SSH_USER = "dyzurny"
-SSH_KEY = "~/.ssh/niechybnie_niechybnie_dyzurny"
+_SSH_ENV = {
+    "host": "KAJET_LOG_SSH_HOST",
+    "user": "KAJET_LOG_SSH_USER",
+    "key": "KAJET_LOG_SSH_KEY",
+}
+
+_ENV_FILE_VAR = "KAJET_LOG_ENV_FILE"
+# Resolved from this file, not the working directory: analyze-logs.py is run from
+# wherever the operator happens to be standing.
+_DEFAULT_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 LEVEL_ORDER = {"debug": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
 
@@ -51,12 +67,12 @@ def build_selector(
     """Build a LogQL query for kajet-turbo logs.
 
     `service` (stable, e.g. "kajet-mcp") and `level` are Loki labels (see the
-    Alloy pipeline's discovery.relabel + stage.labels config in the niechybnie
-    repo) and go in the stream selector. `container` used to be a label too,
-    but it embeds a redeploy-unique suffix and got dropped for cardinality —
-    `service` replaces it. `msg` was dropped as a label for the same reason
-    (it exploded per-UUID messages into their own streams), so it's filtered
-    as a `| json` line filter instead of a label match. Everything else
+    Alloy pipeline's discovery.relabel + stage.labels config in the
+    infrastructure repo) and go in the stream selector. `container` used to be a
+    label too, but it embeds a redeploy-unique suffix and got dropped for
+    cardinality — `service` replaces it. `msg` was dropped as a label for the
+    same reason (it exploded per-UUID messages into their own streams), so it is
+    filtered as a `| json` line filter instead of a label match. Everything else
     (--grep, --fields) stays client-side in analyze-logs.py, same as today.
     """
     parts = [
@@ -96,8 +112,85 @@ def parse_query_range_response(data: dict[str, Any]) -> list[dict]:
     return [event for _, event in rows]
 
 
-class LokiUnreachableError(RuntimeError):
+class LokiError(RuntimeError):
+    """Base for errors whose message is remediation text the CLI prints verbatim."""
+
+
+class LokiUnreachableError(LokiError):
     pass
+
+
+class LokiConfigError(LokiError):
+    pass
+
+
+def _env_file_path() -> Path:
+    override = os.environ.get(_ENV_FILE_VAR, "").strip()
+    return Path(override).expanduser() if override else _DEFAULT_ENV_FILE
+
+
+def _load_env_file(path: Path) -> dict[str, str]:
+    """``KEY=value`` pairs from a dotenv-style file; missing file means no pairs.
+
+    Deliberately minimal: comments, blank lines, an optional ``export`` prefix, and one
+    layer of surrounding quotes. No interpolation, no multi-line values, no export
+    semantics — anything richer belongs in a real settings library, and this file holds
+    three connection strings.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError, NotADirectoryError, IsADirectoryError, PermissionError:
+        return {}
+    values: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip().removeprefix("export ").lstrip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        values[key.strip()] = value
+    return values
+
+
+@dataclass(frozen=True, slots=True)
+class SshTarget:
+    """Where the tunnel connects, sourced from configuration rather than source.
+
+    Field names map to environment variables through ``_SSH_ENV``; keeping that mapping
+    in one place is what lets ``from_env`` read both sources and report every missing
+    variable at once instead of one per failed run.
+    """
+
+    host: str
+    user: str
+    key: str
+
+    @classmethod
+    def from_env(cls) -> SshTarget:
+        """The process environment wins over the file, so a one-off override is a
+        prefixed variable rather than an edit to a file that outlives the run."""
+        env_file = _env_file_path()
+        from_file = _load_env_file(env_file)
+        values: dict[str, str] = {}
+        missing: list[str] = []
+        for field in fields(cls):
+            var = _SSH_ENV[field.name]
+            value = (os.environ.get(var) or from_file.get(var, "")).strip()
+            if value:
+                values[field.name] = value
+            else:
+                missing.append(var)
+        if missing:
+            raise LokiConfigError(
+                f"Loki access is not configured: {', '.join(missing)} "
+                f"{'is' if len(missing) == 1 else 'are'} unset in the environment and in "
+                f"{env_file}. Set {'it' if len(missing) == 1 else 'them'} to the log host, "
+                "the SSH user, and the private key path, or re-run with "
+                "--source docker-logs."
+            )
+        return cls(**values)
 
 
 def _free_local_port() -> int:
@@ -107,7 +200,7 @@ def _free_local_port() -> int:
 
 
 class _Tunnel:
-    def __init__(self) -> None:
+    def __init__(self, target: SshTarget) -> None:
         self.port = _free_local_port()
         self.proc = subprocess.Popen(
             [
@@ -117,7 +210,7 @@ class _Tunnel:
                 "-L",
                 f"{self.port}:localhost:3100",
                 "-i",
-                SSH_KEY,
+                target.key,
                 "-o",
                 "BatchMode=yes",
                 "-o",
@@ -126,13 +219,13 @@ class _Tunnel:
                 "StrictHostKeyChecking=accept-new",
                 "-o",
                 "ExitOnForwardFailure=yes",
-                f"{SSH_USER}@{SSH_HOST}",
+                f"{target.user}@{target.host}",
             ],
         )
         self.proc.wait()  # -f backgrounds after auth; wait() reaps the launcher, not the tunnel
         if self.proc.returncode != 0:
             raise LokiUnreachableError(
-                f"SSH tunnel to {SSH_HOST} failed (exit {self.proc.returncode}) — "
+                f"SSH tunnel to {target.host} failed (exit {self.proc.returncode}) — "
                 "check connectivity, or re-run with --source docker-logs."
             )
         atexit.register(self.close)
@@ -200,7 +293,7 @@ def fetch_events(
     min_level: str | None = None,
     msg_filter: list[str] | None = None,
 ) -> list[dict]:
-    tunnel = _Tunnel()
+    tunnel = _Tunnel(SshTarget.from_env())
     selector = build_selector(role, env, min_level=min_level, msg_filter=msg_filter)
     query = urllib.parse.urlencode(
         {

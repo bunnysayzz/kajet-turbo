@@ -5,13 +5,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
 
+import pytest
 from loki_source import (
+    LokiConfigError,
+    SshTarget,
     _to_unix_ns,
     _warn_if_capped,
     _warn_if_stale,
     build_selector,
     parse_query_range_response,
 )
+
+SSH_ENV = ("KAJET_LOG_SSH_HOST", "KAJET_LOG_SSH_USER", "KAJET_LOG_SSH_KEY")
 
 
 def test_build_selector_base():
@@ -171,3 +176,106 @@ def test_warn_if_stale_silent_on_unparseable_ts(capsys):
     """A malformed ts is the line parser's problem, not a staleness signal."""
     _warn_if_stale([{"ts": "not a timestamp"}, {"msg": "no ts at all"}], "now")
     assert capsys.readouterr().err == ""
+
+
+def _set_ssh_env(monkeypatch, tmp_path, **overrides: str | None) -> Path:
+    """Set the three SSH variables, with `None` meaning "unset this one".
+
+    Also points KAJET_LOG_ENV_FILE at a path under tmp_path that does not exist yet, so
+    a real `.env` in the checkout can never decide the outcome of a test. Returns that
+    path for the cases that want to write one.
+    """
+    values = {"KAJET_LOG_SSH_HOST": "logs.example", "KAJET_LOG_SSH_USER": "reader"}
+    values["KAJET_LOG_SSH_KEY"] = "/keys/reader"
+    values.update(overrides)
+    for var in SSH_ENV:
+        value = values[var]
+        if value is None:
+            monkeypatch.delenv(var, raising=False)
+        else:
+            monkeypatch.setenv(var, value)
+    env_file = tmp_path / "loki.env"
+    monkeypatch.setenv("KAJET_LOG_ENV_FILE", str(env_file))
+    return env_file
+
+
+def test_ssh_target_from_env_reads_all_three(monkeypatch, tmp_path):
+    _set_ssh_env(monkeypatch, tmp_path)
+    assert SshTarget.from_env() == SshTarget(host="logs.example", user="reader", key="/keys/reader")
+
+
+def test_ssh_target_from_env_names_the_single_missing_variable(monkeypatch, tmp_path):
+    _set_ssh_env(monkeypatch, tmp_path, KAJET_LOG_SSH_USER=None)
+    with pytest.raises(LokiConfigError) as excinfo:
+        SshTarget.from_env()
+    message = str(excinfo.value)
+    assert "KAJET_LOG_SSH_USER is unset" in message
+    assert "KAJET_LOG_SSH_HOST" not in message
+    assert "--source docker-logs" in message
+
+
+def test_ssh_target_from_env_names_every_missing_variable_at_once(monkeypatch, tmp_path):
+    """One failed run should report the whole gap, not the first hole in it."""
+    _set_ssh_env(monkeypatch, tmp_path, KAJET_LOG_SSH_HOST=None, KAJET_LOG_SSH_USER=None)
+    with pytest.raises(LokiConfigError) as excinfo:
+        SshTarget.from_env()
+    message = str(excinfo.value)
+    assert "KAJET_LOG_SSH_HOST, KAJET_LOG_SSH_USER are unset" in message
+
+
+def test_ssh_target_from_env_treats_blank_as_missing(monkeypatch, tmp_path):
+    _set_ssh_env(monkeypatch, tmp_path, KAJET_LOG_SSH_KEY="   ")
+    with pytest.raises(LokiConfigError, match="KAJET_LOG_SSH_KEY"):
+        SshTarget.from_env()
+
+
+def test_ssh_target_from_env_strips_surrounding_whitespace(monkeypatch, tmp_path):
+    _set_ssh_env(monkeypatch, tmp_path, KAJET_LOG_SSH_HOST=" logs.example\n")
+    assert SshTarget.from_env().host == "logs.example"
+
+
+def test_ssh_target_falls_back_to_the_env_file(monkeypatch, tmp_path):
+    env_file = _set_ssh_env(monkeypatch, tmp_path, KAJET_LOG_SSH_HOST=None)
+    env_file.write_text("KAJET_LOG_SSH_HOST=from-file.example\n", encoding="utf-8")
+    assert SshTarget.from_env().host == "from-file.example"
+
+
+def test_ssh_target_process_env_wins_over_the_file(monkeypatch, tmp_path):
+    """A prefixed variable is the one-off override; the file is the standing config."""
+    env_file = _set_ssh_env(monkeypatch, tmp_path, KAJET_LOG_SSH_HOST="from-env.example")
+    env_file.write_text("KAJET_LOG_SSH_HOST=from-file.example\n", encoding="utf-8")
+    assert SshTarget.from_env().host == "from-env.example"
+
+
+def test_ssh_target_env_file_syntax(monkeypatch, tmp_path):
+    env_file = _set_ssh_env(
+        monkeypatch,
+        tmp_path,
+        KAJET_LOG_SSH_HOST=None,
+        KAJET_LOG_SSH_USER=None,
+        KAJET_LOG_SSH_KEY=None,
+    )
+    env_file.write_text(
+        "# connection for the log tunnel\n"
+        "\n"
+        "export KAJET_LOG_SSH_HOST=logs.example\n"
+        '  KAJET_LOG_SSH_USER = "reader"  \n'
+        "KAJET_LOG_SSH_KEY='/keys/reader'\n"
+        "this line has no equals sign and is ignored\n",
+        encoding="utf-8",
+    )
+    assert SshTarget.from_env() == SshTarget(host="logs.example", user="reader", key="/keys/reader")
+
+
+def test_ssh_target_missing_message_names_the_env_file(monkeypatch, tmp_path):
+    env_file = _set_ssh_env(monkeypatch, tmp_path, KAJET_LOG_SSH_KEY=None)
+    with pytest.raises(LokiConfigError) as excinfo:
+        SshTarget.from_env()
+    assert str(env_file) in str(excinfo.value)
+
+
+def test_ssh_target_env_file_absent_is_not_an_error(monkeypatch, tmp_path):
+    """The file is optional — a fully exported environment needs none."""
+    env_file = _set_ssh_env(monkeypatch, tmp_path)
+    assert not env_file.exists()
+    assert SshTarget.from_env().user == "reader"

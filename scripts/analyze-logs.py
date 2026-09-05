@@ -493,8 +493,11 @@ def main() -> None:
             min_level=args.min_level if args.mode == "errors" else None,
             msg_filter=msg_filter,
         )
-    except Exception as e:  # LokiUnreachableError carries the remediation text
-        if type(e).__name__ != "LokiUnreachableError":
+    except Exception as e:  # loki_source's own errors carry the remediation text
+        # Matched by class name rather than isinstance: importing loki_source here
+        # would undo load_events' lazy import, which keeps the SSH/socket/subprocess
+        # surface out of pure --source docker-logs runs.
+        if not any(cls.__name__ == "LokiError" for cls in type(e).__mro__):
             raise
         sys.exit(str(e))
 
