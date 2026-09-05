@@ -1,12 +1,21 @@
 # Notes Service Layer
 
 This package (`NoteService` plus its collaborators `NoteTagService`, `NoteFolderService`,
-`NoteLinkService`) is the synchronous, request-facing CRUD layer for notes — called directly
-from API routes and MCP tools, not dispatched by job kind. That is the boundary between this
-package and the flat `services/` directory: background job handlers (`embed_handler.py`,
-`push_handler.py`, `reconcile_links_handler.py`, `reindex_handler.py`) live there regardless of
-which domain they touch, registered once in `register_job_handlers()` (`server.py:48`). A new
-background handler does not belong in this package even if it operates on notes.
+`NoteLinkService`, `NoteVersionService`, `NoteSearchService`, `NoteTemporalService`) is the
+synchronous, request-facing CRUD layer for notes — called directly from API routes and MCP
+tools, not dispatched by job kind. That is the boundary between this package and the flat
+`services/` directory: background job handlers (`embed_handler.py`, `push_handler.py`,
+`reconcile_links_handler.py`, `reindex_handler.py`) live there regardless of which domain they
+touch, registered once in `register_job_handlers()` (`server.py:48`). A new background handler
+does not belong in this package even if it operates on notes.
+
+`NoteTemporalService` (`temporal.py`) is a deliberate exception to how every other collaborator
+here is exposed: `NoteFolderService`/`NoteVersionService`/`NoteTagService`/`NoteLinkService`/
+`NoteSearchService` are reached only through one-line delegate methods on `NoteService`, but
+REST and MCP call `NoteTemporalService.entries_in`/`temporal_backfill_preview`/
+`apply_temporal_backfill` directly — `NoteService` carries no delegating wrappers for this
+domain at all (#224). Its constructor takes only `NoteRepository`, same as
+`NoteVersionService`.
 
 ## Note-body writes go through `staged_workspace_change`
 
@@ -44,9 +53,11 @@ index ahead of the tree.
 `insert_in_session`/`update_in_session` — SQL is cheap to fail before anything touches disk),
 `flush()`s so a constraint violation surfaces before the tree write rather than at COMMIT, then
 commits the git tree via `staged_workspace_change` inside the same transaction. `save`,
-`save_many`, `update`, `edit_many`, and `apply_temporal_backfill` all call it — this is the
-shared batch skeleton #144 asked for; `edit_many` and `apply_temporal_backfill` are two of its
-callers, not two parallel implementations. `delete`/`delete_many` predate this helper and use
+`save_many`, `update`, and `edit_many` (all in `NoteService`) plus `NoteTemporalService.
+apply_temporal_backfill` all call it — this is the shared batch skeleton #144 asked for;
+`edit_many` and `apply_temporal_backfill` are two of its callers, not two parallel
+implementations, even though the latter now lives in a different class in this package.
+`delete`/`delete_many` predate this helper and use
 `GitRepository.delete_file(s)` directly instead of `staged_workspace_change`, but follow the
 same rows-first-commit-last ordering.
 
