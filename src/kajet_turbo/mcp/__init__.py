@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
-from key_value.aio.stores.memory import MemoryStore
 
 from kajet_turbo.mcp.collections import build_collections
 from kajet_turbo.mcp.context import build_mcp_context
@@ -18,9 +17,12 @@ _INSTRUCTIONS = """
 Kajet — git-versioned markdown notebook.
 
 ## Workflow
-1. list_workspaces → activate_workspace before operations that use the active workspace
-2. search_notes(workspace="all") or search_notes(workspace="NAME") can be used without
-   activation; "all" omits workspaces whose global-search setting is disabled
+1. list_workspaces to see which workspaces you can use, then pass `workspace` on
+   workspace-scoped tools (save_note, list_notes, search_notes, ...) — tools addressed by
+   note_id (get_note, edit_note, delete_note, ...) need no workspace at all, except
+   get_note by title, which still requires workspace
+2. search_notes(workspace="all") or search_notes(workspace="NAME") — "all" omits
+   workspaces whose global-search setting is disabled
 3. list_folders / search_notes / list_notes to orient yourself
 4. get_note / save_note / edit_note / save_notes for reads and writes
 
@@ -43,7 +45,7 @@ Kajet — git-versioned markdown notebook.
   from any note response; renders as a clickable link to the note in its workspace
 
 Use [[note:NOTE_ID]] when linking across workspaces — the title-based forms only
-resolve within the active workspace.
+resolve within the note's own workspace.
 
 ## Identifiers
 - note_id: stable UUID — use for get_note, edit_note, delete_note, get_note_links
@@ -102,38 +104,27 @@ the fresh sha. There is no confirm flag; git history (restore_note_version) is t
 def build_mcp(resources: AppResources) -> FastMCP:
     """Build MCP from one application graph. The single registration site (see
     src/kajet_turbo/mcp/CLAUDE.md) — callers pass one AppResources, real or test-built."""
-    state_store = MemoryStore()
     context = build_mcp_context(
         resources.workspace_service,
         resources.oauth_repo,
-        resources.active_workspace_repo,
         resources.event_repo,
         resources.post_commit_hooks,
+        resources.target_resolver,
     )
     mcp = FastMCP(
         "kajet-turbo",
         instructions=_INSTRUCTIONS,
         auth=resources.provider,
-        session_state_store=state_store,
     )
     mcp.add_middleware(ServiceErrorMiddleware(context))
-    mcp.mount(
-        build_workspaces(
-            resources.workspace_service, resources.active_workspace_repo, state_store=state_store
-        )
-    )
+    mcp.mount(build_workspaces(resources.workspace_service))
     mcp.mount(
         build_notes(
             resources.note_service,
             resources.workspace_service,
             resources.folder_meta_repo,
             resources.collection_service,
-            state_store=state_store,
         )
     )
-    mcp.mount(
-        build_collections(
-            resources.collection_service, resources.workspace_service, state_store=state_store
-        )
-    )
+    mcp.mount(build_collections(resources.collection_service, resources.workspace_service))
     return mcp

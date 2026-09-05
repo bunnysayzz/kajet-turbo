@@ -7,7 +7,6 @@ from sqlmodel import Session
 from kajet_turbo.db import Database
 from kajet_turbo.embedding.cache import EmbeddingCacheRepository
 from kajet_turbo.models import User
-from kajet_turbo.repositories.active_workspace import ActiveWorkspaceRepository
 from kajet_turbo.repositories.dangling_links import DanglingLinkRepository
 from kajet_turbo.repositories.folder_meta import FolderMetaRepository
 from kajet_turbo.repositories.jobs import JobRepository
@@ -30,6 +29,7 @@ from kajet_turbo.services.notes import (
     NoteTagService,
     NoteVersionService,
 )
+from kajet_turbo.services.targets import NoteTarget, WorkspaceTarget
 from kajet_turbo.services.workspaces import WorkspaceService
 
 
@@ -119,7 +119,6 @@ def build_workspace_service(database: Database) -> WorkspaceService:
         DanglingLinkRepository(engine),
         FolderMetaRepository(engine),
         WorkspaceRemoteRepository(engine),
-        ActiveWorkspaceRepository(engine),
         jobs,
         reconcile_repo=reconcile_repo,
     )
@@ -140,3 +139,13 @@ def service(database: Database) -> NoteService:
         jobs=JobRepository(database.engine),
     )
     return build_note_service(database, indexer=indexer)
+
+
+def workspace_target(owner_id: str, name: str, path) -> WorkspaceTarget:
+    """Build a WorkspaceTarget by hand for tests that call NoteService entry points
+    directly, bypassing the real TargetResolver (already covered by test_targets.py)."""
+    return WorkspaceTarget(owner_id=owner_id, name=name, path=Path(path))
+
+
+def note_target(owner_id: str, name: str, path, note_id: str) -> NoteTarget:
+    return NoteTarget(note_id=note_id, workspace=workspace_target(owner_id, name, path))

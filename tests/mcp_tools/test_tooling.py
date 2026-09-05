@@ -48,12 +48,12 @@ def test_service_errors_tuple_is_exact():
 
 
 def test_check_batch_rejects_empty():
-    with pytest.raises(ToolError, match=r"note_ids nie może być puste\."):
+    with pytest.raises(ToolError, match=r"note_ids cannot be empty\."):
         check_batch([], "note_ids", "note_id")
 
 
 def test_check_batch_rejects_oversized_with_exact_message():
-    with pytest.raises(ToolError, match=r"Maksymalnie 50 edycji na wywołanie \(podano 51\)\."):
+    with pytest.raises(ToolError, match=r"At most 50 edycji per call \(got 51\)\."):
         check_batch(list(range(51)), "edits", "edycji")
 
 
@@ -66,12 +66,12 @@ def test_require_found_passes_value_through():
 
 
 def test_require_found_raises_on_none():
-    with pytest.raises(ToolError, match=r"Notatka id1 nie znaleziona\."):
+    with pytest.raises(ToolError, match=r"Note not found: note_id=id1"):
         require_found(None, "id1")
 
 
 async def test_middleware_logs_tool_error_from_dependency_resolution(capsys):
-    """A ToolError raised while resolving a Depends default (like ACTIVE_WORKSPACE) never
+    """A ToolError raised while resolving a Depends default (like WORKSPACE_TARGET) never
     enters logged_tool's try/except, since FastMCP resolves it before the wrapped function
     runs. ServiceErrorMiddleware is the one seam that sees dependency resolution and the
     tool body alike, so it must log this case itself (issue #71)."""
@@ -82,25 +82,25 @@ async def test_middleware_logs_tool_error_from_dependency_resolution(capsys):
 
     setup_logging()
 
-    def _no_active_workspace() -> str:
-        raise ToolError("Wywołaj activate_workspace() najpierw.")
+    def _no_workspace_access() -> str:
+        raise ToolError("Workspace not accessible: no-such-ws")
 
     root = FastMCP("root")
     root.add_middleware(ServiceErrorMiddleware())
 
     @root.tool
-    async def needs_workspace(ws: str = Depends(_no_active_workspace)) -> str:
+    async def needs_workspace(ws: str = Depends(_no_workspace_access)) -> str:
         return ws
 
     with logger.contextualize(request_id="test-req"):
         async with Client(root) as client:
-            with pytest.raises(ToolError, match="activate_workspace"):
+            with pytest.raises(ToolError, match="not accessible"):
                 await client.call_tool("needs_workspace")
 
     (entry,) = entries_named(read_log_entries(capsys), "needs_workspace")
     assert entry["level"] == "error"
     assert entry["error_type"] == "ToolError"
-    assert "activate_workspace" in entry["error_msg"]
+    assert "not accessible" in entry["error_msg"]
     assert "duration_ms" in entry
 
 

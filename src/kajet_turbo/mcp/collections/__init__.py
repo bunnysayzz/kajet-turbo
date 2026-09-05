@@ -14,10 +14,11 @@ from kajet_turbo.mcp.collections.types import (
     DeleteCollectionResult,
     OpenEntryResult,
 )
-from kajet_turbo.mcp.context import ACTIVE_WORKSPACE, ActiveWorkspace
+from kajet_turbo.mcp.context import WORKSPACE_TARGET
 from kajet_turbo.mcp.tooling import publish_workspace_changed, read_tool, write_tool
 from kajet_turbo.periods import PeriodKind
 from kajet_turbo.services.collections import CollectionService
+from kajet_turbo.services.targets import WorkspaceTarget
 from kajet_turbo.services.workspaces import WorkspaceService
 from kajet_turbo.shared.notes import NoteListItem
 
@@ -33,9 +34,8 @@ def _to_result(name: str, definition: CollectionDefinition) -> CollectionResult:
 def build_collections(
     collection_service: CollectionService,
     workspace_service: WorkspaceService,
-    state_store=None,
 ) -> FastMCP:
-    srv = FastMCP("collections", session_state_store=state_store)
+    srv = FastMCP("collections")
 
     @srv.tool(**write_tool(tags={"collections"}, idempotent=False))
     @logged_tool
@@ -55,6 +55,9 @@ def build_collections(
             str,
             Field(description="Title template, same placeholders as folder."),
         ],
+        workspace: Annotated[
+            str, Field(description="The workspace name to define the collection in.")
+        ],
         description: Annotated[
             str | None,
             Field(default=None, description="Optional free-text note about this collection."),
@@ -66,7 +69,7 @@ def build_collections(
                 "redefinition and write nothing."
             ),
         ] = False,
-        ws: ActiveWorkspace = ACTIVE_WORKSPACE,
+        target: WorkspaceTarget = WORKSPACE_TARGET,
     ) -> DefineCollectionResult:
         """Define a new collection, or redefine an existing one by name (add vs. update
         is decided by whether the name already exists — same call either way).
@@ -83,9 +86,9 @@ def build_collections(
         """
         result = await run_sync(
             collection_service.define_collection,
-            ws.path,
-            ws.name,
-            ws.owner_id,
+            str(target.path),
+            target.name,
+            target.owner_id,
             name,
             grain,
             cardinality,
@@ -95,30 +98,34 @@ def build_collections(
             dry_run=dry_run,
         )
         if not result.get("would_write"):
-            await publish_workspace_changed(ws)
+            await publish_workspace_changed(target)
         return DefineCollectionResult.model_validate(result)
 
     @srv.tool(**write_tool(tags={"collections"}, destructive=False, idempotent=True))
     @logged_tool
     async def delete_collection(
         name: str,
-        ws: ActiveWorkspace = ACTIVE_WORKSPACE,
+        workspace: Annotated[
+            str, Field(description="The workspace name to delete the collection from.")
+        ],
+        target: WorkspaceTarget = WORKSPACE_TARGET,
     ) -> DeleteCollectionResult:
         """Remove a collection definition. Non-destructive by construction: this only
         edits the collection's own definition — every note that was a member becomes a
         loose note, no note file is ever touched, moved, or deleted.
         """
-        result = await run_sync(collection_service.delete_collection, ws.path, name)
-        await publish_workspace_changed(ws)
+        result = await run_sync(collection_service.delete_collection, str(target.path), name)
+        await publish_workspace_changed(target)
         return DeleteCollectionResult.model_validate(result)
 
     @srv.tool(**read_tool(tags={"collections"}))
     @logged_tool
     async def list_collections(
-        ws: ActiveWorkspace = ACTIVE_WORKSPACE,
+        workspace: Annotated[str, Field(description="The workspace name to list collections in.")],
+        target: WorkspaceTarget = WORKSPACE_TARGET,
     ) -> list[CollectionResult]:
-        """List every collection defined in the active workspace."""
-        definitions = await run_sync(collection_service.list_collections, ws.path)
+        """List every collection defined in the given workspace."""
+        definitions = await run_sync(collection_service.list_collections, str(target.path))
         return [_to_result(name, d) for name, d in definitions.items()]
 
     @srv.tool(**write_tool(tags={"collections"}, destructive=False, idempotent=False))
@@ -131,7 +138,8 @@ def build_collections(
             str,
             Field(description="ISO calendar date (YYYY-MM-DD) the entry is addressed by."),
         ],
-        ws: ActiveWorkspace = ACTIVE_WORKSPACE,
+        workspace: Annotated[str, Field(description="The workspace name the collection lives in.")],
+        target: WorkspaceTarget = WORKSPACE_TARGET,
     ) -> OpenEntryResult:
         """Resolve or create a collection's entry for a date.
 
@@ -150,17 +158,23 @@ def build_collections(
                 f"date must be an ISO calendar date (YYYY-MM-DD), got {date!r}."
             ) from exc
         result = await run_sync(
-            collection_service.open_entry, ws.path, ws.name, ws.owner_id, collection, when
+            collection_service.open_entry,
+            str(target.path),
+            target.name,
+            target.owner_id,
+            collection,
+            when,
         )
         if result["created"]:
-            await publish_workspace_changed(ws)
+            await publish_workspace_changed(target)
         return OpenEntryResult.model_validate(result)
 
     @srv.tool(**read_tool(tags={"collections"}))
     @logged_tool
     async def list_collection_entries(
         collection: Annotated[str, Field(description="Name of the collection to list.")],
-        ws: ActiveWorkspace = ACTIVE_WORKSPACE,
+        workspace: Annotated[str, Field(description="The workspace name the collection lives in.")],
+        target: WorkspaceTarget = WORKSPACE_TARGET,
     ) -> list[NoteListItem]:
         """List every note that currently belongs to a collection, across all dates.
 
@@ -171,7 +185,11 @@ def build_collections(
         collection's history in one call.
         """
         entries = await run_sync(
-            collection_service.list_entries, ws.path, ws.name, ws.owner_id, collection
+            collection_service.list_entries,
+            str(target.path),
+            target.name,
+            target.owner_id,
+            collection,
         )
         return [NoteListItem.model_validate(n) for n in entries]
 

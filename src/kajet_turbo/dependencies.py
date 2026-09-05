@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import httpx
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException
 from starlette.requests import Request
 
 from kajet_turbo import identity
@@ -26,8 +26,8 @@ from kajet_turbo.embedding.base import EmbedderConfig
 from kajet_turbo.embedding.cache import EmbeddingCacheRepository, QueryEmbeddingCache
 from kajet_turbo.embedding.client import SharedEmbedderClient
 from kajet_turbo.embedding.resolver import ProfileResolver
-from kajet_turbo.errors import AuthError
-from kajet_turbo.repositories.active_workspace import ActiveWorkspaceRepository
+from kajet_turbo.errors import AuthError, NoteError
+from kajet_turbo.log import log_permission_denied
 from kajet_turbo.repositories.dangling_links import DanglingLinkRepository
 from kajet_turbo.repositories.embedding_profiles import EmbeddingProfileRepository
 from kajet_turbo.repositories.events import EventRepository
@@ -67,6 +67,14 @@ from kajet_turbo.services.push_handler import PushHandler
 from kajet_turbo.services.reconcile_links_handler import ReconcileLinksHandler
 from kajet_turbo.services.reindex_handler import ReindexNoteHandler
 from kajet_turbo.services.ssh_keys import SshKeyService
+from kajet_turbo.services.targets import (
+    DenialReason,
+    NoteTarget,
+    TargetResolutionError,
+    TargetResolver,
+    WorkspaceTarget,
+    audit_denied,
+)
 from kajet_turbo.services.workspace_remote import WorkspaceRemoteService
 from kajet_turbo.services.workspaces import WorkspaceService
 
@@ -118,13 +126,13 @@ class AppResources:
     user_repo: UserRepository
     session_repo: SessionRepository
     workspace_repo: WorkspaceRepository
-    active_workspace_repo: ActiveWorkspaceRepository
     oauth_repo: OAuthRepository
     provider: KajetOAuthProvider
     folder_meta_repo: FolderMetaRepository
     job_repo: JobRepository
     note_service: NoteService
     workspace_service: WorkspaceService
+    target_resolver: TargetResolver
     collection_service: CollectionService
     embedding_profile_service: EmbeddingProfileService
     ssh_key_service: SshKeyService
@@ -181,7 +189,6 @@ def build_resources(config: AppConfig) -> AppResources:
         user_repo = UserRepository(db.engine)
         session_repo = SessionRepository(db.engine)
         workspace_repo = WorkspaceRepository(db.engine)
-        active_workspace_repo = ActiveWorkspaceRepository(db.engine)
         oauth_repo = OAuthRepository(db.engine)
         provider = create_auth(oauth_repo, base_url=config.mcp_base_url)
         profile_repo = EmbeddingProfileRepository(db.engine)
@@ -267,7 +274,6 @@ def build_resources(config: AppConfig) -> AppResources:
             dangling_repo,
             folder_meta_repo,
             workspace_remote_repo,
-            active_workspace_repo,
             job_repo,
             reconcile_repo=reconcile_repo,
             workspaces_dir=config.workspaces_dir,
@@ -296,13 +302,13 @@ def build_resources(config: AppConfig) -> AppResources:
             user_repo,
             session_repo,
             workspace_repo,
-            active_workspace_repo,
             oauth_repo,
             provider,
             folder_meta_repo,
             job_repo,
             note_service,
             workspace_service,
+            TargetResolver(note_repo, workspace_service),
             CollectionService(note_repo, note_service),
             embedding_profile_service,
             ssh_key_service,
@@ -368,6 +374,10 @@ def get_workspace_service(request: Request) -> WorkspaceService:
     return _resources(request).workspace_service
 
 
+def get_target_resolver(request: Request) -> TargetResolver:
+    return _resources(request).target_resolver
+
+
 def get_user_repo(request: Request) -> UserRepository:
     return _resources(request).user_repo
 
@@ -378,10 +388,6 @@ def get_session_repo(request: Request) -> SessionRepository:
 
 def get_workspace_repo(request: Request) -> WorkspaceRepository:
     return _resources(request).workspace_repo
-
-
-def get_active_workspace_repo(request: Request) -> ActiveWorkspaceRepository:
-    return _resources(request).active_workspace_repo
 
 
 def get_oauth_repo(request: Request) -> OAuthRepository:
@@ -407,3 +413,58 @@ def get_required_user(request: Request) -> dict:
     if not user:
         raise HTTPException(status_code=401, detail=AuthError.NOT_AUTHENTICATED)
     return user
+
+
+def resolve_workspace_target(
+    name: str,
+    user: dict = Depends(get_required_user),
+    resolver: TargetResolver = Depends(get_target_resolver),
+) -> WorkspaceTarget:
+    try:
+        return resolver.workspace(user["id"], name)
+    except TargetResolutionError as e:
+        audit_denied(
+            e.failure,
+            action="workspace.read",
+            resource="workspace",
+            caller_id=user["id"],
+            workspace=name,
+        )
+        raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED) from e
+
+
+def resolve_note_target(
+    name: str,
+    note_id: str,
+    ws: WorkspaceTarget = Depends(resolve_workspace_target),
+    resolver: TargetResolver = Depends(get_target_resolver),
+    user: dict = Depends(get_required_user),
+) -> NoteTarget:
+    """404 before file access: order is fixed by the contract -- 401 (get_required_user)
+    -> 403 on URL-workspace access (resolve_workspace_target) -> 404 on note not-found-
+    or-not-yours -> 404 on note/URL-workspace mismatch. The mismatch branch is the actual
+    fix for the bug this resolver exists for: a note_id from workspace A must not be
+    reachable through workspace B's URL just because both belong to the same user."""
+    try:
+        target = resolver.note(user["id"], note_id)
+    except TargetResolutionError as e:
+        audit_denied(
+            e.failure,
+            action="note.read",
+            resource="note",
+            caller_id=user["id"],
+            note_id=note_id,
+            workspace=name,
+        )
+        raise HTTPException(status_code=404, detail=NoteError.NOT_FOUND) from e
+    if target.workspace.name != ws.name:
+        log_permission_denied(
+            action="note.read",
+            resource="note",
+            caller_id=user["id"],
+            reason=DenialReason.WORKSPACE_MISMATCH,
+            note_id=note_id,
+            workspace=name,
+        )
+        raise HTTPException(status_code=404, detail=NoteError.NOT_FOUND)
+    return target

@@ -5,7 +5,7 @@ from pydantic import Field
 
 from kajet_turbo.concurrency import run_sync
 from kajet_turbo.log import logged_tool
-from kajet_turbo.mcp.context import ACTIVE_WORKSPACE, ActiveWorkspace
+from kajet_turbo.mcp.context import NOTE_TARGET
 from kajet_turbo.mcp.notes.types import (
     NoteLinkItem,
     NoteLinksResult,
@@ -14,6 +14,7 @@ from kajet_turbo.mcp.notes.types import (
 )
 from kajet_turbo.mcp.tooling import read_tool, require_found, write_tool
 from kajet_turbo.services.notes import NoteData, NoteService
+from kajet_turbo.services.targets import NoteTarget
 from kajet_turbo.services.workspaces import WorkspaceService
 from kajet_turbo.shared.notes import HistoryEntry
 
@@ -21,26 +22,19 @@ from kajet_turbo.shared.notes import HistoryEntry
 def build_history(
     note_service: NoteService,
     workspace_service: WorkspaceService,
-    state_store=None,
 ) -> FastMCP:
-    srv = FastMCP("notes-history", session_state_store=state_store)
+    srv = FastMCP("notes-history")
 
     @srv.tool(**read_tool(tags={"notes", "history"}))
     @logged_tool
     async def get_note_history(
         note_id: str,
         limit: int = 50,
-        ws: ActiveWorkspace = ACTIVE_WORKSPACE,
+        target: NoteTarget = NOTE_TARGET,
     ) -> list[HistoryEntry]:
-        """Zwraca historię wersji notatki.
-        Każdy wpis: {sha, message, timestamp}."""
-        entries = await run_sync(
-            note_service.get_history,
-            note_id,
-            owner_id=ws.owner_id,
-            ws_path=ws.path,
-            limit=limit,
-        )
+        """Returns the note's version history.
+        Each entry: {sha, message, timestamp}."""
+        entries = await run_sync(note_service.get_history, target, limit)
         return [HistoryEntry.model_validate(e) for e in entries]
 
     @srv.tool(**read_tool(tags={"notes", "history"}))
@@ -48,13 +42,11 @@ def build_history(
     async def get_note_at_version(
         note_id: str,
         sha: str,
-        ws: ActiveWorkspace = ACTIVE_WORKSPACE,
+        target: NoteTarget = NOTE_TARGET,
     ) -> NoteData:
-        """Zwraca treść notatki z konkretnego commita git.
-        sha: pełny lub skrócony hash commita z get_note_history."""
-        version = await run_sync(
-            note_service.get_version, note_id, sha, owner_id=ws.owner_id, ws_path=ws.path
-        )
+        """Returns the note's content at a specific git commit.
+        sha: full or short commit hash from get_note_history."""
+        version = await run_sync(note_service.get_version, target, sha)
         return NoteData.model_validate(version)
 
     @srv.tool(**write_tool(tags={"notes", "history"}, destructive=True))
@@ -65,22 +57,21 @@ def build_history(
         expected_sha: Annotated[
             str,
             Field(
-                description="Aktualny HEAD sha notatki z get_note/get_note_history — dowód, "
-                "że widziałeś wersję, którą restore nadpisze. Niezgodność zwraca StaleVersion."
+                description="The note's current HEAD sha from get_note/get_note_history — "
+                "proof you saw the version restore is about to overwrite. A mismatch "
+                "returns StaleVersion."
             ),
         ],
-        ws: ActiveWorkspace = ACTIVE_WORKSPACE,
+        target: NoteTarget = NOTE_TARGET,
     ) -> SavedNoteResult | StaleVersion:
-        """Przywraca notatkę do wersji z podanego commita.
-        sha: pełny lub skrócony hash z get_note_history.
-        expected_sha: HEAD sha — dowód, że widziałeś bieżącą wersję przed nadpisaniem;
-        przy niezgodności zwraca StaleVersion."""
+        """Restores the note to the version at the given commit.
+        sha: full or short hash from get_note_history.
+        expected_sha: HEAD sha — proof you saw the current version before it is
+        overwritten; a mismatch returns StaleVersion."""
         result = await run_sync(
             note_service.restore_version,
-            note_id,
+            target,
             sha,
-            owner_id=ws.owner_id,
-            ws_path=ws.path,
             expected_sha=expected_sha,
         )
         if result.get("stale_sha"):
@@ -93,18 +84,23 @@ def build_history(
         note_id: str,
         include_meta: bool = False,
         include_cross_workspace: bool = True,
-        ws: ActiveWorkspace = ACTIVE_WORKSPACE,
+        target: NoteTarget = NOTE_TARGET,
     ) -> NoteLinksResult:
-        """Zwraca linki wychodzące i przychodzące dla notatki w aktywnym workspace.
-        outlinks: notatki, do których ta notatka linkuje.
-        backlinks: notatki, które linkują do tej notatki.
-        include_meta=True dorzuca tags i updated_at do każdego wpisu.
-        include_cross_workspace=False ogranicza backlinks tylko do tego samego workspace.
-        Gdy wpis ma workspace != aktywny — to link cross-workspace; by go zapisać w treści
-        użyj [[note:NOTE_ID]] (np. [[note:abc-123]]) zamiast [[Title]]."""
+        """Returns outgoing and incoming links for the note.
+        outlinks: notes this note links to.
+        backlinks: notes that link to this note.
+        include_meta=True adds tags and updated_at to each entry.
+        include_cross_workspace=False restricts backlinks to the same workspace only.
+        When an entry's workspace differs from this note's own workspace, it is a
+        cross-workspace link; to write one in note content, use [[note:NOTE_ID]]
+        (e.g. [[note:abc-123]]) instead of [[Title]]."""
         result = require_found(
             await run_sync(
-                note_service.links, note_id, ws.owner_id, include_meta, include_cross_workspace
+                note_service.links,
+                target.note_id,
+                target.workspace.owner_id,
+                include_meta,
+                include_cross_workspace,
             ),
             note_id,
         )
