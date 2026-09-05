@@ -221,6 +221,13 @@ export const PreferencesError = {
   PREFERENCES_INVALID_INPUT: 'PREFERENCES_INVALID_INPUT',
 } as const;
 
+export type RequestError = typeof RequestError[keyof typeof RequestError];
+
+
+export const RequestError = {
+  INVALID_INPUT: 'INVALID_INPUT',
+} as const;
+
 export type TargetError = typeof TargetError[keyof typeof TargetError];
 
 
@@ -231,7 +238,7 @@ export const TargetError = {
   TARGET_MIXED_WORKSPACES: 'TARGET_MIXED_WORKSPACES',
 } as const;
 
-export const ErrorCode = {...AuthError,...WorkspaceError,...NoteError,...FolderError,...GitError,...PreferencesError,...TargetError,} as const
+export const ErrorCode = {...AuthError,...WorkspaceError,...NoteError,...FolderError,...GitError,...PreferencesError,...RequestError,...TargetError,} as const
 export type ErrorCode = typeof ErrorCode[keyof typeof ErrorCode];
 
 export interface ErrorResponse {
