@@ -27,7 +27,7 @@ def test_reindex_endpoint_refuses_mass_deletion(auth_client):
     resp = client.post("/api/workspaces/test-ws/reindex")
 
     assert resp.status_code == 409
-    assert resp.json()["detail"]["error"] == "NOTE_RECONCILE_REFUSED"
+    assert resp.json()["error"] == "NOTE_RECONCILE_REFUSED"
 
 
 def test_reindex_403_no_access(no_access_client):

@@ -18,6 +18,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   FOLDER_NOT_FOUND: 'Folder nie istnieje.',
   GIT_ERROR: 'Błąd git.',
   INTERNAL_ERROR: 'Błąd wewnętrzny.',
+  INVALID_INPUT: 'Nieprawidłowe dane.',
 };
 
 export function translateErrorCode(code: string | undefined): string | undefined {

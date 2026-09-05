@@ -1,9 +1,9 @@
-from fastapi import FastAPI
 from sqlmodel import Session
 from starlette.testclient import TestClient
 
 from kajet_turbo.api.workspace_remote import router
 from kajet_turbo.dependencies import (
+    CurrentUser,
     get_required_user,
     get_workspace_remote_service,
     get_workspace_service,
@@ -13,6 +13,7 @@ from kajet_turbo.repositories.jobs import JobRepository
 from kajet_turbo.repositories.ssh_keys import SshKeyRepository
 from kajet_turbo.repositories.workspace_remote import WorkspaceRemoteRepository
 from kajet_turbo.services.workspace_remote import WorkspaceRemoteService
+from tests.api.conftest import build_test_app
 
 
 def _app(database, monkeypatch, tmp_path, *, user_id="u1", access=True):
@@ -39,8 +40,7 @@ def _app(database, monkeypatch, tmp_path, *, user_id="u1", access=True):
         JobRepository(database.engine),
         workspaces_dir=str(tmp_path),
     )
-    app = FastAPI()
-    app.include_router(router)
+    app = build_test_app(routers=(router,))
     app.dependency_overrides[get_workspace_remote_service] = lambda: svc
 
     class _Access:
@@ -49,7 +49,9 @@ def _app(database, monkeypatch, tmp_path, *, user_id="u1", access=True):
 
     app.dependency_overrides[get_workspace_service] = _Access
     if user_id:
-        app.dependency_overrides[get_required_user] = lambda: {"id": user_id}
+        app.dependency_overrides[get_required_user] = lambda: CurrentUser(
+            id=user_id, email="", timezone="", locale=""
+        )
     return TestClient(app)
 
 

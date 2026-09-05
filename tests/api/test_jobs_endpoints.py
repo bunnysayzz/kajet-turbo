@@ -1,12 +1,12 @@
-from fastapi import FastAPI
 from sqlmodel import Session
 from starlette.testclient import TestClient
 
 from kajet_turbo.api.jobs import router
-from kajet_turbo.dependencies import get_job_service, get_required_user
+from kajet_turbo.dependencies import CurrentUser, get_job_service, get_required_user
 from kajet_turbo.models import User
 from kajet_turbo.repositories.jobs import JobRepository
 from kajet_turbo.services.jobs import JobService
+from tests.api.conftest import build_test_app
 
 
 def _app(database, monkeypatch, *, user_id="u1"):
@@ -14,11 +14,12 @@ def _app(database, monkeypatch, *, user_id="u1"):
         with Session(database.engine) as s:
             s.add(User(id=user_id, email="u@e.com", created_at="2026-01-01"))
             s.commit()
-    app = FastAPI()
-    app.include_router(router)
+    app = build_test_app(routers=(router,))
     app.dependency_overrides[get_job_service] = lambda: JobService(JobRepository(database.engine))
     if user_id:
-        app.dependency_overrides[get_required_user] = lambda: {"id": user_id}
+        app.dependency_overrides[get_required_user] = lambda: CurrentUser(
+            id=user_id, email="", timezone="", locale=""
+        )
     return TestClient(app), JobRepository(database.engine)
 
 

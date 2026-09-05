@@ -4,7 +4,9 @@ from fastapi.responses import JSONResponse
 from kajet_turbo import identity
 from kajet_turbo.api.schemas import LoginResponse, OkResponse, SessionResponse
 from kajet_turbo.auth import DUMMY_PASSWORD_HASH, verify_password
+from kajet_turbo.concurrency import run_sync
 from kajet_turbo.dependencies import (
+    CurrentUser,
     get_oauth_repo,
     get_provider,
     get_required_user,
@@ -38,13 +40,13 @@ async def api_login(
     password = str(body.get("password", ""))
     pending_id = str(body.get("pending_id", ""))
 
-    user = user_repo.get_by_email(email)
+    user = await run_sync(user_repo.get_by_email, email)
     password_hash = user.password_hash if user and user.password_hash else DUMMY_PASSWORD_HASH
-    password_ok = verify_password(password_hash, password)
+    password_ok = await run_sync(verify_password, password_hash, password)
     if not user or not password_ok:
         return JSONResponse({"error": "Nieprawidłowy email lub hasło."}, status_code=401)
 
-    session_token = session_repo.create(user.id)
+    session_token = await run_sync(session_repo.create, user.id)
     data: dict = {"email": user.email}
 
     if pending_id:
@@ -61,11 +63,11 @@ async def api_login(
 
 
 @router.get("/api/session", response_model=SessionResponse)
-async def api_session_get(user: dict = Depends(get_required_user)) -> Response:
+async def api_session_get(user: CurrentUser = Depends(get_required_user)) -> Response:
     return JSONResponse(
         {
-            "email": user["email"],
-            "preferences": {"timezone": user["timezone"], "locale": user["locale"]},
+            "email": user.email,
+            "preferences": {"timezone": user.timezone, "locale": user.locale},
         }
     )
 
@@ -77,7 +79,7 @@ async def api_session_delete(
 ) -> Response:
     token = request.cookies.get(_SESSION_COOKIE, "")
     if token:
-        session_repo.delete(token)
+        await run_sync(session_repo.delete, token)
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(_SESSION_COOKIE)
     return resp
@@ -85,16 +87,16 @@ async def api_session_delete(
 
 @router.delete("/api/sessions", response_model=OkResponse)
 async def api_sessions_delete(
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     oauth_repo: OAuthRepository = Depends(get_oauth_repo),
     session_repo: SessionRepository = Depends(get_session_repo),
 ) -> Response:
     """Sign the current user out of every browser and connected OAuth client."""
-    user_id = str(user["id"])
+    user_id = str(user.id)
     # Revoke OAuth first. If deleting browser sessions then fails, the still-valid cookie
     # lets the user safely retry this idempotent operation.
-    oauth_count = oauth_repo.delete_credentials_by_user(user_id)
-    session_count = session_repo.delete_all_for_user(user_id)
+    oauth_count = await run_sync(oauth_repo.delete_credentials_by_user, user_id)
+    session_count = await run_sync(session_repo.delete_all_for_user, user_id)
     logger.info(
         "user_signed_out_everywhere",
         user_id=user_id,

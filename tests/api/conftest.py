@@ -1,15 +1,17 @@
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from starlette.testclient import TestClient
 
+from kajet_turbo.api.errors import install_error_handlers
 from kajet_turbo.api.workspaces import router
 from kajet_turbo.db import Database
 from kajet_turbo.dependencies import (
+    CurrentUser,
     get_note_service,
     get_required_user,
     get_target_resolver,
@@ -42,6 +44,16 @@ class ApiTestContext:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.client, name)
+
+
+def build_test_app(routers: Iterable[APIRouter] = (router,)) -> FastAPI:
+    """Same exception-handler wiring as production (`server.py`'s `install_error_handlers`)
+    so a route's error contract does not depend on which harness exercises it."""
+    app = FastAPI()
+    for r in routers:
+        app.include_router(r)
+    install_error_handlers(app)
+    return app
 
 
 @pytest.fixture
@@ -91,8 +103,7 @@ def api_client_factory(
             if grant_access:
                 workspace_repository.grant_access(user_id, "test-ws")
 
-        app = FastAPI()
-        app.include_router(router)
+        app = build_test_app()
         app.dependency_overrides[get_note_service] = lambda: note_service
         app.dependency_overrides[get_workspace_service] = lambda: workspace_service
         app.dependency_overrides[get_target_resolver] = lambda: TargetResolver(
@@ -100,7 +111,9 @@ def api_client_factory(
         )
         if user_id is not None:
             _uid = user_id
-            app.dependency_overrides[get_required_user] = lambda: {"id": _uid}
+            app.dependency_overrides[get_required_user] = lambda: CurrentUser(
+                id=_uid, email="", timezone="", locale=""
+            )
 
         client_manager = TestClient(app)
         client = client_manager.__enter__()

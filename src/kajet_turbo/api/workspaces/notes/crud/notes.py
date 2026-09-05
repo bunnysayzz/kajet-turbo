@@ -13,6 +13,7 @@ from kajet_turbo.api.schemas.errors import ErrorResponse
 from kajet_turbo.api.workspaces.notes._views import enrich_note_items
 from kajet_turbo.concurrency import run_sync
 from kajet_turbo.dependencies import (
+    CurrentUser,
     get_note_service,
     get_required_user,
     resolve_note_target,
@@ -39,7 +40,7 @@ router = APIRouter(
 )
 def api_list_notes(
     name: str,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     workspace: WorkspaceTarget = Depends(resolve_workspace_target),
     note_service: NoteService = Depends(get_note_service),
     folder: str | None = None,
@@ -48,7 +49,7 @@ def api_list_notes(
 ) -> JSONResponse:
     if tag is not None:
         notes = note_service.notes_by_tag(
-            name, user["id"], tag, include_descendants=include_descendants
+            name, user.id, tag, include_descendants=include_descendants
         )
     else:
         notes = note_service.list_notes(workspace, folder=folder, limit=None)
@@ -64,7 +65,7 @@ def api_list_notes(
 async def api_create_note(
     name: str,
     request: Request,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     workspace: WorkspaceTarget = Depends(resolve_workspace_target),
     note_service: NoteService = Depends(get_note_service),
 ) -> JSONResponse:
@@ -117,7 +118,7 @@ async def api_create_note(
 async def api_create_notes_batch(
     name: str,
     request: Request,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     workspace: WorkspaceTarget = Depends(resolve_workspace_target),
     note_service: NoteService = Depends(get_note_service),
 ) -> JSONResponse:
@@ -150,7 +151,7 @@ async def api_update_note(
     name: str,
     note_id: str,
     request: Request,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     target: NoteTarget = Depends(resolve_note_target),
     note_service: NoteService = Depends(get_note_service),
 ) -> JSONResponse:
@@ -217,7 +218,7 @@ async def api_move_note(
     name: str,
     note_id: str,
     request: Request,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     target: NoteTarget = Depends(resolve_note_target),
     note_service: NoteService = Depends(get_note_service),
 ) -> JSONResponse:
@@ -255,7 +256,7 @@ async def api_move_note(
 async def api_delete_note(
     name: str,
     note_id: str,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     target: NoteTarget = Depends(resolve_note_target),
     note_service: NoteService = Depends(get_note_service),
 ) -> JSONResponse:

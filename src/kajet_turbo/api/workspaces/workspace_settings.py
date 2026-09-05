@@ -11,7 +11,12 @@ from kajet_turbo.api.schemas import (
 )
 from kajet_turbo.api.schemas.errors import ErrorResponse
 from kajet_turbo.concurrency import run_sync
-from kajet_turbo.dependencies import get_note_service, get_required_user, get_workspace_service
+from kajet_turbo.dependencies import (
+    CurrentUser,
+    get_note_service,
+    get_required_user,
+    get_workspace_service,
+)
 from kajet_turbo.errors import AuthError, WorkspaceError
 from kajet_turbo.services.notes import NoteService
 from kajet_turbo.services.workspaces import WorkspaceService
@@ -27,12 +32,12 @@ router = APIRouter(
 @router.get("/api/workspaces/{name}/settings", response_model=WorkspaceSettingsResponse)
 async def api_get_workspace_settings(
     name: str,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     ws_service: WorkspaceService = Depends(get_workspace_service),
 ) -> JSONResponse:
-    if not ws_service.has_access(user["id"], name):
+    if not await run_sync(ws_service.has_access, user.id, name):
         raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED)
-    values = await run_sync(ws_service.get_settings, user["id"], name)
+    values = await run_sync(ws_service.get_settings, user.id, name)
     return JSONResponse({"definitions": ws_settings.definitions(), "values": values})
 
 
@@ -44,10 +49,10 @@ async def api_get_workspace_settings(
 async def api_update_workspace_settings(
     name: str,
     request: Request,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     ws_service: WorkspaceService = Depends(get_workspace_service),
 ) -> JSONResponse:
-    if not ws_service.has_access(user["id"], name):
+    if not await run_sync(ws_service.has_access, user.id, name):
         raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED)
     try:
         body = await request.json()
@@ -59,11 +64,11 @@ async def api_update_workspace_settings(
     result: dict = {}
     try:
         for key, value in values.items():
-            result = await run_sync(ws_service.set_setting, user["id"], name, key, value)
+            result = await run_sync(ws_service.set_setting, user.id, name, key, value)
     except ValueError:
         raise HTTPException(status_code=422, detail=WorkspaceError.INVALID_INPUT) from None
     if not result:
-        result = await run_sync(ws_service.get_settings, user["id"], name)
+        result = await run_sync(ws_service.get_settings, user.id, name)
     return JSONResponse({"values": result})
 
 
@@ -73,17 +78,17 @@ async def api_update_workspace_settings(
 )
 async def api_temporal_backfill_preview(
     name: str,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     ws_service: WorkspaceService = Depends(get_workspace_service),
     note_service: NoteService = Depends(get_note_service),
 ) -> JSONResponse:
-    if not ws_service.has_access(user["id"], name):
+    if not await run_sync(ws_service.has_access, user.id, name):
         raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED)
     result = await run_sync(
         note_service.temporal_backfill_preview,
         name,
-        user["id"],
-        ws_service.workspace_path(user["id"], name),
+        user.id,
+        ws_service.workspace_path(user.id, name),
     )
     return JSONResponse(result)
 
@@ -96,18 +101,18 @@ async def api_temporal_backfill_preview(
 async def api_apply_temporal_backfill(
     name: str,
     body: ApplyTemporalBackfillRequest,
-    user: dict = Depends(get_required_user),
+    user: CurrentUser = Depends(get_required_user),
     ws_service: WorkspaceService = Depends(get_workspace_service),
     note_service: NoteService = Depends(get_note_service),
 ) -> JSONResponse:
-    if not ws_service.has_access(user["id"], name):
+    if not await run_sync(ws_service.has_access, user.id, name):
         raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED)
     try:
         result = await run_sync(
             note_service.apply_temporal_backfill,
             name,
-            user["id"],
-            ws_service.workspace_path(user["id"], name),
+            user.id,
+            ws_service.workspace_path(user.id, name),
             [candidate.model_dump() for candidate in body.candidates],
         )
     except ValueError as exc:

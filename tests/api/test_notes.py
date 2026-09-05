@@ -252,7 +252,7 @@ def test_create_note_duplicate_returns_409(auth_client):
     client.post("/api/workspaces/test-ws/notes", json={"title": "Dup"})
     resp = client.post("/api/workspaces/test-ws/notes", json={"title": "Dup"})
     assert resp.status_code == 409
-    assert "detail" in resp.json()
+    assert resp.json()["error"] == "NOTE_ALREADY_EXISTS"
 
 
 def test_create_note_normalization_collision_returns_409_not_500(auth_client):
@@ -263,7 +263,7 @@ def test_create_note_normalization_collision_returns_409_not_500(auth_client):
     client.post("/api/workspaces/test-ws/notes", json={"title": "A B"})
     resp = client.post("/api/workspaces/test-ws/notes", json={"title": "A:B"})
     assert resp.status_code == 409
-    assert "detail" in resp.json()
+    assert resp.json()["error"] == "NOTE_ALREADY_EXISTS"
 
 
 def test_create_note_missing_title_returns_422(auth_client):
@@ -466,8 +466,8 @@ def test_create_note_broken_wikilink_returns_422(auth_client):
         json={"title": "Source", "content": "see [[Ghost]]"},
     )
     assert resp.status_code == 422
-    assert resp.json()["detail"]["error"] == "BROKEN_WIKILINK"
-    assert "Ghost" in resp.json()["detail"]["detail"]
+    assert resp.json()["error"] == "BROKEN_WIKILINK"
+    assert "Ghost" in resp.json()["detail"]
 
 
 def test_create_note_valid_wikilink_succeeds(auth_client):
@@ -530,8 +530,8 @@ def test_update_note_broken_wikilink_returns_422(auth_client):
         json={"content": "[[Ghost]]", "expected_sha": sha},
     )
     assert resp.status_code == 422
-    assert resp.json()["detail"]["error"] == "BROKEN_WIKILINK"
-    assert "Ghost" in resp.json()["detail"]["detail"]
+    assert resp.json()["error"] == "BROKEN_WIKILINK"
+    assert "Ghost" in resp.json()["detail"]
 
 
 def test_update_note_stale_sha_returns_409(auth_client):
@@ -549,8 +549,8 @@ def test_update_note_stale_sha_returns_409(auth_client):
     )
 
     assert resp.status_code == 409
-    assert resp.json()["detail"]["error"] == "NOTE_STALE_VERSION"
-    assert "detail" not in resp.json()["detail"]
+    assert resp.json()["error"] == "NOTE_STALE_VERSION"
+    assert "detail" not in resp.json()
     updated = note_svc.get_with_content(_note(ws_path, note_id))
     assert updated.content == "v2"
 
@@ -565,7 +565,7 @@ def test_update_note_missing_expected_sha_returns_409_not_500(auth_client):
     )
 
     assert resp.status_code == 409
-    assert resp.json()["detail"]["error"] == "NOTE_STALE_VERSION"
+    assert resp.json()["error"] == "NOTE_STALE_VERSION"
     updated = note_svc.get_with_content(_note(ws_path, note_id))
     assert updated.content == "v1"
 
