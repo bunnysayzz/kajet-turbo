@@ -7,6 +7,7 @@ docs/superpowers/specs/2026-07-19-loki-log-tooling-design.md for the design.
 from __future__ import annotations
 
 import atexit
+import datetime
 import json
 import signal
 import socket
@@ -23,6 +24,11 @@ SSH_USER = "dyzurny"
 SSH_KEY = "~/.ssh/niechybnie_niechybnie_dyzurny"
 
 LEVEL_ORDER = {"debug": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
+
+# How far behind wall-clock the newest event can lag before we warn that the
+# selector may not match what's currently being ingested (e.g. a relabeling
+# change upstream), rather than a real outage.
+_STALE_THRESHOLD_S = 120
 
 _ENV_ALIASES = {
     "prod": "produkcja",
@@ -42,16 +48,20 @@ def build_selector(
     min_level: str | None = None,
     msg_filter: list[str] | None = None,
 ) -> str:
-    """Build a LogQL label selector for kajet-turbo logs.
+    """Build a LogQL query for kajet-turbo logs.
 
-    Pushes level/msg filtering into the selector since both are Loki labels
-    (see the Alloy pipeline's discovery.relabel + stage.labels config in the
-    niechybnie repo) — everything else (--grep, --fields) stays client-side
-    in analyze-logs.py, same as it is today.
+    `service` (stable, e.g. "kajet-mcp") and `level` are Loki labels (see the
+    Alloy pipeline's discovery.relabel + stage.labels config in the niechybnie
+    repo) and go in the stream selector. `container` used to be a label too,
+    but it embeds a redeploy-unique suffix and got dropped for cardinality —
+    `service` replaces it. `msg` was dropped as a label for the same reason
+    (it exploded per-UUID messages into their own streams), so it's filtered
+    as a `| json` line filter instead of a label match. Everything else
+    (--grep, --fields) stays client-side in analyze-logs.py, same as today.
     """
     parts = [
         'coolify_projectName="kajet-turbo"',
-        f'container=~"kajet-{role}-.*"',
+        f'service="kajet-{role}"',
         f'coolify_environmentName="{_normalize_env(env)}"',
     ]
     if min_level:
@@ -59,9 +69,10 @@ def build_selector(
         threshold = LEVEL_ORDER.get(min_level, 2)
         levels = [lvl for lvl, order in LEVEL_ORDER.items() if order >= threshold]
         parts.append(f'level=~"{"|".join(levels)}"')
+    query = "{" + ", ".join(parts) + "}"
     if msg_filter:
-        parts.append(f'msg=~"{"|".join(msg_filter)}"')
-    return "{" + ", ".join(parts) + "}"
+        query += f' | json | msg=~"{"|".join(msg_filter)}"'
+    return query
 
 
 def parse_query_range_response(data: dict[str, Any]) -> list[dict]:
@@ -153,6 +164,34 @@ def _warn_if_capped(events: list[dict]) -> None:
         )
 
 
+def _warn_if_stale(events: list[dict], until: str) -> None:
+    """Warn if the newest event lags wall-clock 'now' by more than the threshold.
+
+    A large lag usually means the selector no longer matches what's being
+    ingested (e.g. an upstream relabeling change dropped or renamed a label
+    this query still filters on) rather than a real outage — but either way
+    the caller shouldn't trust the window on faith.
+    """
+    if until != "now" or not events:
+        return
+    last_ts = events[-1].get("ts")
+    if not isinstance(last_ts, str):
+        return
+    try:
+        last_epoch = datetime.datetime.fromisoformat(last_ts.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return
+    lag_s = time.time() - last_epoch
+    if lag_s > _STALE_THRESHOLD_S:
+        print(
+            f"warning: newest Loki event is {lag_s:.0f}s old — the selector may not match "
+            "what's currently being ingested (relabeling change upstream?), not necessarily "
+            "a real outage. Verify with a broader query or --source docker-logs before "
+            "trusting this window.",
+            file=sys.stderr,
+        )
+
+
 def fetch_events(
     role: str,
     env: str,
@@ -185,6 +224,7 @@ def fetch_events(
         tunnel.close()
     events = parse_query_range_response(data)
     _warn_if_capped(events)
+    _warn_if_stale(events, until)
     return events
 
 
@@ -196,6 +236,5 @@ def _to_unix_ns(spec: str) -> int:
         n = int(spec[:-1])
         seconds = {"s": 1, "m": 60, "h": 3600, "d": 86400}[spec[-1]]
         return int((time.time() - n * seconds) * 1e9)
-    import datetime
 
     return int(datetime.datetime.fromisoformat(spec).timestamp() * 1e9)
