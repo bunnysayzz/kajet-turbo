@@ -26,7 +26,7 @@ from kajet_turbo.services.notes.staged_change import (
     StagedChange,
     commit_rows_then_tree,
 )
-from kajet_turbo.services.targets import NoteTarget
+from kajet_turbo.services.targets import NoteTarget, WorkspaceTarget
 from kajet_turbo.workspace import (
     InvalidFolderError,
     list_workspace_folders,
@@ -57,6 +57,33 @@ class NoteFolderService:
         self._link_service = link_service
         self._folder_meta_repo = folder_meta_repo
         self._reconcile_repo = reconcile_repo
+
+    @target_write_transaction
+    def create_folder(self, target: WorkspaceTarget, path: str) -> str:
+        """Create an empty folder via a `.gitkeep` marker commit; idempotent if the
+        marker already exists. No DB row: folders are derived from note paths plus
+        whatever `.gitkeep` markers are on disk, so this is a pure git write, not a
+        `commit_rows_then_tree` caller like every note-body write in this module."""
+        ws_path = str(target.path)
+        ws_root = Path(ws_path).resolve()
+        target_dir = (ws_root / path).resolve()
+        try:
+            target_dir.relative_to(ws_root)
+        except ValueError:
+            raise InvalidFolderError(f"Path escapes workspace root: {path}") from None
+        gitkeep = target_dir / ".gitkeep"
+        gitkeep.parent.mkdir(parents=True, exist_ok=True)
+        if gitkeep.exists():
+            return path
+        gitkeep.touch()
+        relative = str(gitkeep.relative_to(ws_root))
+        try:
+            GitRepository(ws_path).commit_file(relative, f"folder: add {path}")
+        except GitError:
+            gitkeep.unlink(missing_ok=True)
+            raise
+        logger.info("folder_created", workspace=target.name, path=path)
+        return path
 
     @target_write_transaction
     def move(self, target: NoteTarget, folder: str) -> dict:

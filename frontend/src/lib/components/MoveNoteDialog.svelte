@@ -3,7 +3,6 @@
     apiWorkspaceContentsApiWorkspacesNameContentsGet,
     apiMoveNoteApiWorkspacesNameNotesNoteIdMovePost,
   } from '$lib/api';
-  import { jsonBody } from '$lib/api/mutate';
   import { useAsyncAction } from '$lib/utils/async-action.svelte';
   import Modal from '$lib/components/ui/Modal.svelte';
 
@@ -40,11 +39,9 @@
   async function moveNote() {
     if (fetchAction.busy || moveAction.busy || folders.length === 0) return;
     await moveAction.run(async () => {
-      const result = await apiMoveNoteApiWorkspacesNameNotesNoteIdMovePost(
-        slug,
-        noteId,
-        jsonBody({ folder: destination }),
-      );
+      const result = await apiMoveNoteApiWorkspacesNameNotesNoteIdMovePost(slug, noteId, {
+        folder: destination,
+      });
       if (result.status !== 200) throw new Error();
       await onmoved(result.data.folder);
       modal.close();

@@ -4,7 +4,7 @@
     apiCreateFolderApiWorkspacesNameFoldersPost,
     apiCreateNoteApiWorkspacesNameNotesPost,
   } from '$lib/api';
-  import { apiErrorMessage, jsonBody } from '$lib/api/mutate';
+  import { apiErrorMessage } from '$lib/api/mutate';
   import {
     noteEditPath,
     noteInTreePath,
@@ -26,7 +26,7 @@
 
   async function handleCreateFolder(path: string): Promise<void> {
     try {
-      await apiCreateFolderApiWorkspacesNameFoldersPost(slug, jsonBody({ path }));
+      await apiCreateFolderApiWorkspacesNameFoldersPost(slug, { path });
     } catch (e) {
       throw new Error(apiErrorMessage(e, 'Nie udało się utworzyć folderu'), { cause: e });
     }
@@ -37,10 +37,11 @@
   async function handleCreateNote(title: string): Promise<void> {
     let noteId: string;
     try {
-      const result = await apiCreateNoteApiWorkspacesNameNotesPost(
-        slug,
-        jsonBody({ title, folder: data.folderPath, content: '' }),
-      );
+      const result = await apiCreateNoteApiWorkspacesNameNotesPost(slug, {
+        title,
+        folder: data.folderPath,
+        content: '',
+      });
       if (result.status !== 201) throw new Error();
       noteId = result.data.note_id;
     } catch (e) {

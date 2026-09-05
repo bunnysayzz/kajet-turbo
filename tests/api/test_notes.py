@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from kajet_turbo.services.targets import NoteTarget, WorkspaceTarget
 
 
@@ -272,6 +274,36 @@ def test_create_note_missing_title_returns_422(auth_client):
     client, _, _ = auth_client
     resp = client.post("/api/workspaces/test-ws/notes", json={"content": "x"})
     assert resp.status_code == 422
+    assert resp.json()["error"] == "NOTE_TITLE_REQUIRED"
+
+
+def test_create_note_blank_title_returns_422(auth_client):
+    client, _, _ = auth_client
+    resp = client.post("/api/workspaces/test-ws/notes", json={"title": "   "})
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "NOTE_TITLE_REQUIRED"
+
+
+def test_create_note_strips_title_whitespace(auth_client):
+    client, _, _ = auth_client
+    resp = client.post("/api/workspaces/test-ws/notes", json={"title": "  Padded  "})
+    assert resp.status_code == 201
+    note = auth_client.note_read_service.get(resp.json()["note_id"], owner_id="u1")
+    assert note["title"] == "Padded"
+
+
+def test_create_note_ignores_unknown_field(auth_client):
+    client, _, _ = auth_client
+    resp = client.post(
+        "/api/workspaces/test-ws/notes", json={"title": "T", "bogus_field": "whatever"}
+    )
+    assert resp.status_code == 201
+
+
+def test_create_note_rejects_array_body(auth_client):
+    client, _, _ = auth_client
+    resp = client.post("/api/workspaces/test-ws/notes", json=[{"title": "T"}])
+    assert resp.status_code == 422
 
 
 def test_create_note_returns_401_when_anon(anon_client):
@@ -351,6 +383,44 @@ def test_update_note_title(auth_client):
     assert updated["title"] == "New Title"
 
 
+@pytest.mark.parametrize(
+    ("patch_body", "expected_tags", "expected_folder"),
+    [
+        ({}, ["a"], "docs"),
+        ({"tags": None, "folder": None}, ["a"], "docs"),
+        ({"tags": [], "folder": ""}, [], ""),
+    ],
+    ids=["omitted", "explicit_null", "explicit_empty"],
+)
+def test_update_note_tags_and_folder_patch_semantics(
+    auth_client, patch_body, expected_tags, expected_folder
+):
+    client, note_svc, ws_path = auth_client
+    note_id = note_svc.save(_ws(ws_path), "Patched", "c", ["a"], folder="docs")["note_id"]
+    sha = note_svc.get_history(_note(ws_path, note_id))[0]["sha"]
+    resp = client.patch(
+        f"/api/workspaces/test-ws/notes/{note_id}",
+        json={**patch_body, "expected_sha": sha},
+    )
+    assert resp.status_code == 200
+    updated = auth_client.note_read_service.get(note_id, owner_id="u1")
+    assert updated["tags"] == expected_tags
+    assert updated["folder"] == expected_folder
+
+
+def test_update_note_content_omitted_leaves_body_untouched(auth_client):
+    client, note_svc, ws_path = auth_client
+    note_id = note_svc.save(_ws(ws_path), "Patched", "original body", [])["note_id"]
+    sha = note_svc.get_history(_note(ws_path, note_id))[0]["sha"]
+    resp = client.patch(
+        f"/api/workspaces/test-ws/notes/{note_id}",
+        json={"title": "Renamed", "expected_sha": sha},
+    )
+    assert resp.status_code == 200
+    updated = auth_client.note_read_service.get_with_content(_note(ws_path, note_id))
+    assert updated.content == "original body"
+
+
 def test_move_note_to_existing_folder(auth_client):
     client, note_svc, ws_path = auth_client
     (Path(ws_path) / "archive").mkdir()
@@ -405,6 +475,17 @@ def test_move_note_invalid_path_returns_422(auth_client):
     )
 
     assert resp.status_code == 422
+    assert resp.json()["error"] == "INVALID_FOLDER"
+
+
+def test_move_note_missing_folder_key_returns_422(auth_client):
+    client, note_svc, ws_path = auth_client
+    note_id = note_svc.save(_ws(ws_path), "Move me", "c", [])["note_id"]
+
+    resp = client.post(f"/api/workspaces/test-ws/notes/{note_id}/move", json={})
+
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "FOLDER_PATH_REQUIRED"
 
 
 def test_move_note_returns_401_when_anon(anon_client):
@@ -422,6 +503,19 @@ def test_update_note_not_found_returns_404(auth_client):
     resp = client.patch(
         "/api/workspaces/test-ws/notes/nonexistent",
         json={"content": "x"},
+    )
+    assert resp.status_code == 404
+
+
+def test_update_note_outside_workspace_returns_404(auth_client):
+    # 404 before any file access when a note_id from another workspace is addressed
+    # through this URL's workspace name -- resolve_note_target's contract (#246).
+    client, note_svc, ws_path = auth_client
+    other_ws = WorkspaceTarget(owner_id="u1", name="other", path=Path(ws_path))
+    note_id = note_svc.save(other_ws, "Elsewhere", "c", [])["note_id"]
+    resp = client.patch(
+        f"/api/workspaces/test-ws/notes/{note_id}",
+        json={"content": "x", "expected_sha": "deadbeef"},
     )
     assert resp.status_code == 404
 
@@ -448,6 +542,22 @@ def test_delete_note_removes_it(auth_client):
 def test_delete_note_not_found_returns_404(auth_client):
     client, _, _ = auth_client
     resp = client.delete("/api/workspaces/test-ws/notes/nonexistent")
+    assert resp.status_code == 404
+
+
+def test_delete_note_outside_workspace_returns_404(auth_client):
+    client, note_svc, ws_path = auth_client
+    other_ws = WorkspaceTarget(owner_id="u1", name="other", path=Path(ws_path))
+    note_id = note_svc.save(other_ws, "Elsewhere", "c", [])["note_id"]
+    resp = client.delete(f"/api/workspaces/test-ws/notes/{note_id}")
+    assert resp.status_code == 404
+
+
+def test_move_note_outside_workspace_returns_404(auth_client):
+    client, note_svc, ws_path = auth_client
+    other_ws = WorkspaceTarget(owner_id="u1", name="other", path=Path(ws_path))
+    note_id = note_svc.save(other_ws, "Elsewhere", "c", [])["note_id"]
+    resp = client.post(f"/api/workspaces/test-ws/notes/{note_id}/move", json={"folder": "docs"})
     assert resp.status_code == 404
 
 
@@ -745,11 +855,15 @@ def test_batch_create_missing_notes_key_returns_422(auth_client):
     assert resp.status_code == 422
 
 
-def test_batch_create_malformed_note_missing_title_returns_per_note_error(auth_client):
+def test_batch_create_note_missing_title_returns_422(auth_client):
+    # Correction from #253: batch items are now CreateNoteRequest, same as single create --
+    # a missing or blank title 422s the whole request instead of a per-item error, matching
+    # MCP's save_notes (NoteInput.title is likewise required). Runtime-only conflicts (a
+    # duplicate title, see test_batch_create_best_effort_mixed) still resolve per-item.
     client, _, _ = auth_client
     resp = client.post(
         "/api/workspaces/test-ws/notes/batch",
         json={"notes": [{"content": "no title"}]},
     )
-    assert resp.status_code == 200
-    assert resp.json()["results"][0]["error"]
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "NOTE_TITLE_REQUIRED"

@@ -4,7 +4,7 @@
     apiDeleteNoteApiWorkspacesNameNotesNoteIdDelete,
     apiUpdateNoteApiWorkspacesNameNotesNoteIdPatch,
   } from '$lib/api';
-  import { apiErrorMessage, jsonBody } from '$lib/api/mutate';
+  import { apiErrorMessage } from '$lib/api/mutate';
   import Breadcrumb from '$lib/components/Breadcrumb.svelte';
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
   import TagEditor from '$lib/components/TagEditor.svelte';
@@ -28,11 +28,12 @@
 
   async function handleSave() {
     await save.run(async () => {
-      await apiUpdateNoteApiWorkspacesNameNotesNoteIdPatch(
-        slug,
-        note.note_id,
-        jsonBody({ title: title.trim(), content, tags, expected_sha: note.sha }),
-      );
+      await apiUpdateNoteApiWorkspacesNameNotesNoteIdPatch(slug, note.note_id, {
+        title: title.trim(),
+        content,
+        tags,
+        expected_sha: note.sha,
+      });
       await invalidate('app:workspace-tree');
       goto(notePath(slug, note.note_id));
     }, 'Nie udało się zapisać');

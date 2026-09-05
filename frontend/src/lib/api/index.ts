@@ -38,6 +38,27 @@ export const AuthError = {
   ACCESS_DENIED: 'ACCESS_DENIED',
 } as const;
 
+export interface CreateNoteRequest {
+  /**
+     * Note title; unique within (workspace, folder)
+     * @minLength 1
+     */
+  title: string;
+  content?: string;
+  folder?: string;
+  tags?: string[];
+  occurred_at?: string | null;
+  period?: string | null;
+}
+
+export interface BatchCreateNotesRequest {
+  /**
+     * @minItems 1
+     * @maxItems 50
+     */
+  notes: CreateNoteRequest[];
+}
+
 /**
  * Which kind of non-exact resolution happened
  */
@@ -95,6 +116,10 @@ export interface ChunkPreviewResponse {
 
 export interface ConsentResponse {
   redirect_uri: string;
+}
+
+export interface CreateFolderRequest {
+  path: string;
 }
 
 export interface CreateFolderResponse {
@@ -379,6 +404,10 @@ export interface LoginResponse {
   redirect_uri?: string | null;
 }
 
+export interface MoveNoteRequest {
+  folder: string;
+}
+
 export interface MoveNoteResponse {
   /** The moved note's id */
   note_id: string;
@@ -536,6 +565,18 @@ export interface UpdateFolderMetaRequest {
   description: string;
   /** LLM instructions for working with notes in this folder; empty string clears */
   instructions: string;
+}
+
+export interface UpdateNoteRequest {
+  title?: string | null;
+  content?: string | null;
+  folder?: string | null;
+  tags?: string[] | null;
+  occurred_at?: string | null;
+  period?: string | null;
+  clear_date_metadata?: boolean;
+  /** The note's current HEAD sha from get_note_history -- a stale or missing value is rejected with 409 NOTE_STALE_VERSION. */
+  expected_sha?: string | null;
 }
 
 export interface UpdateNoteResponse {
@@ -1503,14 +1544,21 @@ export const getApiCreateNoteApiWorkspacesNameNotesPostUrl = (name: string,) => 
 /**
  * @summary Api Create Note
  */
-export const apiCreateNoteApiWorkspacesNameNotesPost = async (name: string, options?: Parameters<typeof customFetch>[1]): Promise<apiCreateNoteApiWorkspacesNameNotesPostResponse> => {
+export const apiCreateNoteApiWorkspacesNameNotesPost = async (name: string,
+    createNoteRequest: CreateNoteRequest, options?: Parameters<typeof customFetch>[1]): Promise<apiCreateNoteApiWorkspacesNameNotesPostResponse> => {
 
-  return customFetch<apiCreateNoteApiWorkspacesNameNotesPostResponse>(getApiCreateNoteApiWorkspacesNameNotesPostUrl(name),
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+return customFetch<apiCreateNoteApiWorkspacesNameNotesPostResponse>(getApiCreateNoteApiWorkspacesNameNotesPostUrl(name),
   {
     ...options,
-    method: 'POST'
-
-
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(createNoteRequest)
   }
 );}
 
@@ -1556,14 +1604,21 @@ export const getApiCreateNotesBatchApiWorkspacesNameNotesBatchPostUrl = (name: s
 /**
  * @summary Api Create Notes Batch
  */
-export const apiCreateNotesBatchApiWorkspacesNameNotesBatchPost = async (name: string, options?: Parameters<typeof customFetch>[1]): Promise<apiCreateNotesBatchApiWorkspacesNameNotesBatchPostResponse> => {
+export const apiCreateNotesBatchApiWorkspacesNameNotesBatchPost = async (name: string,
+    batchCreateNotesRequest: BatchCreateNotesRequest, options?: Parameters<typeof customFetch>[1]): Promise<apiCreateNotesBatchApiWorkspacesNameNotesBatchPostResponse> => {
 
-  return customFetch<apiCreateNotesBatchApiWorkspacesNameNotesBatchPostResponse>(getApiCreateNotesBatchApiWorkspacesNameNotesBatchPostUrl(name),
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+return customFetch<apiCreateNotesBatchApiWorkspacesNameNotesBatchPostResponse>(getApiCreateNotesBatchApiWorkspacesNameNotesBatchPostUrl(name),
   {
     ...options,
-    method: 'POST'
-
-
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(batchCreateNotesRequest)
   }
 );}
 
@@ -1621,14 +1676,21 @@ export const getApiUpdateNoteApiWorkspacesNameNotesNoteIdPatchUrl = (name: strin
  * @summary Api Update Note
  */
 export const apiUpdateNoteApiWorkspacesNameNotesNoteIdPatch = async (name: string,
-    noteId: string, options?: Parameters<typeof customFetch>[1]): Promise<apiUpdateNoteApiWorkspacesNameNotesNoteIdPatchResponse> => {
+    noteId: string,
+    updateNoteRequest: UpdateNoteRequest, options?: Parameters<typeof customFetch>[1]): Promise<apiUpdateNoteApiWorkspacesNameNotesNoteIdPatchResponse> => {
 
-  return customFetch<apiUpdateNoteApiWorkspacesNameNotesNoteIdPatchResponse>(getApiUpdateNoteApiWorkspacesNameNotesNoteIdPatchUrl(name,noteId),
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+return customFetch<apiUpdateNoteApiWorkspacesNameNotesNoteIdPatchResponse>(getApiUpdateNoteApiWorkspacesNameNotesNoteIdPatchUrl(name,noteId),
   {
     ...options,
-    method: 'PATCH'
-
-
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(updateNoteRequest)
   }
 );}
 
@@ -1746,14 +1808,21 @@ export const getApiMoveNoteApiWorkspacesNameNotesNoteIdMovePostUrl = (name: stri
  * @summary Api Move Note
  */
 export const apiMoveNoteApiWorkspacesNameNotesNoteIdMovePost = async (name: string,
-    noteId: string, options?: Parameters<typeof customFetch>[1]): Promise<apiMoveNoteApiWorkspacesNameNotesNoteIdMovePostResponse> => {
+    noteId: string,
+    moveNoteRequest: MoveNoteRequest, options?: Parameters<typeof customFetch>[1]): Promise<apiMoveNoteApiWorkspacesNameNotesNoteIdMovePostResponse> => {
 
-  return customFetch<apiMoveNoteApiWorkspacesNameNotesNoteIdMovePostResponse>(getApiMoveNoteApiWorkspacesNameNotesNoteIdMovePostUrl(name,noteId),
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+return customFetch<apiMoveNoteApiWorkspacesNameNotesNoteIdMovePostResponse>(getApiMoveNoteApiWorkspacesNameNotesNoteIdMovePostUrl(name,noteId),
   {
     ...options,
-    method: 'POST'
-
-
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(moveNoteRequest)
   }
 );}
 
@@ -1981,14 +2050,21 @@ export const getApiCreateFolderApiWorkspacesNameFoldersPostUrl = (name: string,)
 /**
  * @summary Api Create Folder
  */
-export const apiCreateFolderApiWorkspacesNameFoldersPost = async (name: string, options?: Parameters<typeof customFetch>[1]): Promise<apiCreateFolderApiWorkspacesNameFoldersPostResponse> => {
+export const apiCreateFolderApiWorkspacesNameFoldersPost = async (name: string,
+    createFolderRequest: CreateFolderRequest, options?: Parameters<typeof customFetch>[1]): Promise<apiCreateFolderApiWorkspacesNameFoldersPostResponse> => {
 
-  return customFetch<apiCreateFolderApiWorkspacesNameFoldersPostResponse>(getApiCreateFolderApiWorkspacesNameFoldersPostUrl(name),
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+return customFetch<apiCreateFolderApiWorkspacesNameFoldersPostResponse>(getApiCreateFolderApiWorkspacesNameFoldersPostUrl(name),
   {
     ...options,
-    method: 'POST'
-
-
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(createFolderRequest)
   }
 );}
 

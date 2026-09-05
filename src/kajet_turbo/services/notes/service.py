@@ -596,7 +596,7 @@ class NoteService:
     def update(
         self,
         target: NoteTarget,
-        expected_sha: str,
+        expected_sha: str | None,
         title: str | None = None,
         tags: list[str] | None = None,
         folder: str | None = None,
@@ -1496,6 +1496,9 @@ class NoteService:
 
     def get_version(self, target: NoteTarget, sha: str) -> dict:
         return self._version_service.get_version(target, sha)
+
+    def create_folder(self, target: WorkspaceTarget, path: str) -> str:
+        return self._folder_service.create_folder(target, path)
 
     def move(self, target: NoteTarget, folder: str) -> dict:
         return self._folder_service.move(target, folder)
