@@ -13,7 +13,8 @@ from kajet_turbo.dependencies import (
     get_session_repo,
     get_user_repo,
 )
-from kajet_turbo.log import logger
+from kajet_turbo.errors import SecurityEvent, SecurityReason
+from kajet_turbo.log import log_security_event, logger
 from kajet_turbo.repositories.oauth import OAuthRepository
 from kajet_turbo.repositories.sessions import SessionRepository
 from kajet_turbo.repositories.users import UserRepository
@@ -44,6 +45,14 @@ async def api_login(
     password_hash = user.password_hash if user and user.password_hash else DUMMY_PASSWORD_HASH
     password_ok = await run_sync(verify_password, password_hash, password)
     if not user or not password_ok:
+        failure_reason = SecurityReason.BAD_CREDENTIALS if user else SecurityReason.UNKNOWN_EMAIL
+        log_security_event(
+            SecurityEvent.AUTH_FAILURE,
+            level="WARNING",
+            user_id=user.id if user else None,
+            auth_method="password",
+            reason=failure_reason.value,
+        )
         return JSONResponse({"error": "Nieprawidłowy email lub hasło."}, status_code=401)
 
     session_token = await run_sync(session_repo.create, user.id)
@@ -53,8 +62,21 @@ async def api_login(
         try:
             data["redirect_uri"] = await provider.complete_authorization(pending_id, user.id)
         except ValueError:
+            log_security_event(
+                SecurityEvent.AUTH_FAILURE,
+                level="WARNING",
+                user_id=user.id,
+                auth_method="password",
+                reason=SecurityReason.EXPIRED_PENDING.value,
+            )
             return JSONResponse({"error": "Wygasły pending_id."}, status_code=400)
 
+    log_security_event(
+        SecurityEvent.AUTH_SUCCESS,
+        level="INFO",
+        user_id=user.id,
+        auth_method="password",
+    )
     resp = JSONResponse(data)
     resp.set_cookie(
         _SESSION_COOKIE, session_token, max_age=_SESSION_MAX_AGE, httponly=True, samesite="lax"
