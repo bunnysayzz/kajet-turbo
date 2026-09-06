@@ -19,6 +19,7 @@
   import NotesList from './NotesList.svelte';
   import NotePreview from './NotePreview.svelte';
   import MobileFolderNav from './MobileFolderNav.svelte';
+  import WorkspaceGraphLink from '$lib/components/WorkspaceGraphLink.svelte';
 
   let { data } = $props();
   let slug = $derived(data.slug);
@@ -87,6 +88,7 @@
         />
       {/if}
     </div>
+    <WorkspaceGraphLink {slug} variant="sidebar" />
     <a class="explorer__settings" href={workspaceSettingsPath(slug)}>⚙ Ustawienia</a>
   </aside>
 

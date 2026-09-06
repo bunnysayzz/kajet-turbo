@@ -3,6 +3,7 @@
   import { goto, invalidate } from '$app/navigation';
   import { apiSessionDeleteApiSessionDelete } from '$lib/api';
   import { homePath, notesPath } from '$lib/routes';
+  import WorkspaceGraphLink from './WorkspaceGraphLink.svelte';
   import WorkspacePicker from './WorkspacePicker.svelte';
   import UserMenu from './UserMenu.svelte';
 
@@ -27,6 +28,7 @@
         <a href={notesPath(slug)} class="navbar__link" class:navbar__link--active={notesActive}>
           Notes
         </a>
+        <WorkspaceGraphLink {slug} variant="navbar" />
       {/if}
     </div>
     <UserMenu email={page.data.session.email} onLogout={handleLogout} />
