@@ -54,6 +54,10 @@
   const filteredOutlinks = $derived(
     showCrossWorkspace ? outlinks : outlinks.filter((l) => !l.workspace || l.workspace === slug),
   );
+  const relationLists = $derived([
+    { heading: 'Backlinki', links: filteredBacklinks },
+    { heading: 'Wychodzące', links: filteredOutlinks },
+  ]);
 
   let relationView = $state<'lists' | 'graph'>('lists');
   let graphDepth = $state<GraphDepth>(2);
@@ -95,7 +99,9 @@
     const key = graphKey(graphDepth);
     const cached = graphCache.get(key);
     if (cached) {
+      graphRequest += 1;
       graphData = cached;
+      graphLoading = false;
       graphError = '';
       return;
     }
@@ -211,47 +217,29 @@
         {/if}
       </div>
     {:else}
-      {#if filteredBacklinks.length > 0}
-        <div class="meta__section">
-          <h4 class="meta__heading">Backlinki ({filteredBacklinks.length})</h4>
-          <ul class="meta__list">
-            {#each filteredBacklinks as link (link.note_id)}
-              <li>
-                <a
-                  href={noteInTreePath(link.workspace ?? slug, link.folder, link.note_id)}
-                  class="meta__link"
-                >
-                  {#if link.workspace && link.workspace !== slug}
-                    <span class="meta__xws">[{link.workspace}]</span>
-                  {/if}
-                  {#if link.folder}<span class="meta__folder">{link.folder}/</span>{/if}{link.title}
-                </a>
-              </li>
-            {/each}
-          </ul>
-        </div>
-      {/if}
-
-      {#if filteredOutlinks.length > 0}
-        <div class="meta__section">
-          <h4 class="meta__heading">Wychodzące ({filteredOutlinks.length})</h4>
-          <ul class="meta__list">
-            {#each filteredOutlinks as link (link.note_id)}
-              <li>
-                <a
-                  href={noteInTreePath(link.workspace ?? slug, link.folder, link.note_id)}
-                  class="meta__link"
-                >
-                  {#if link.workspace && link.workspace !== slug}
-                    <span class="meta__xws">[{link.workspace}]</span>
-                  {/if}
-                  {#if link.folder}<span class="meta__folder">{link.folder}/</span>{/if}{link.title}
-                </a>
-              </li>
-            {/each}
-          </ul>
-        </div>
-      {/if}
+      {#each relationLists as relation (relation.heading)}
+        {#if relation.links.length > 0}
+          <div class="meta__section">
+            <h4 class="meta__heading">{relation.heading} ({relation.links.length})</h4>
+            <ul class="meta__list">
+              {#each relation.links as link (link.note_id)}
+                <li>
+                  <a
+                    href={noteInTreePath(link.workspace ?? slug, link.folder, link.note_id)}
+                    class="meta__link"
+                  >
+                    {#if link.workspace && link.workspace !== slug}
+                      <span class="meta__xws">[{link.workspace}]</span>
+                    {/if}
+                    {#if link.folder}<span class="meta__folder">{link.folder}/</span
+                      >{/if}{link.title}
+                  </a>
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+      {/each}
     {/if}
   </aside>
 {/if}
@@ -384,6 +372,7 @@
 
     &__graph-section {
       min-width: 0;
+      height: 280px;
     }
 
     &__depth {
