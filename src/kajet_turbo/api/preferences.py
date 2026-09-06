@@ -1,7 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException
 
-from kajet_turbo.api.schemas import UserPreferences
+from kajet_turbo.api.schemas import UpdatePreferencesRequest, UserPreferences
 from kajet_turbo.api.schemas.errors import ErrorResponse
 from kajet_turbo.concurrency import run_sync
 from kajet_turbo.dependencies import CurrentUser, get_preferences_service, get_required_user
@@ -15,8 +14,8 @@ router = APIRouter(responses={401: {"model": ErrorResponse}})
 def api_get_preferences(
     user: CurrentUser = Depends(get_required_user),
     svc: PreferencesService = Depends(get_preferences_service),
-) -> JSONResponse:
-    return JSONResponse(svc.get_preferences(user.id).model_dump())
+) -> UserPreferences:
+    return svc.get_preferences(user.id)
 
 
 @router.patch(
@@ -25,27 +24,21 @@ def api_get_preferences(
     responses={422: {"model": ErrorResponse}},
 )
 async def api_update_preferences(
-    request: Request,
+    body: UpdatePreferencesRequest,
     user: CurrentUser = Depends(get_required_user),
     svc: PreferencesService = Depends(get_preferences_service),
-) -> JSONResponse:
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail=PreferencesError.INVALID_INPUT) from None
-    if not isinstance(body, dict):
+) -> UserPreferences:
+    # exclude_unset (Pydantic's own model_fields_set-based mechanism, matching the
+    # workspace_meta.py/workspace_settings.py PATCH routes) is what tells "field omitted"
+    # (no-op) apart from "field present but null" (must 422, not silently no-op) -- both
+    # parse to the same `None` attribute once Pydantic has validated the body.
+    sent = body.model_dump(exclude_unset=True)
+    if any(value is None for value in sent.values()):
         raise HTTPException(status_code=422, detail=PreferencesError.INVALID_INPUT)
-
-    updates: dict[str, str] = {}
-    for key in ("timezone", "locale"):
-        if key in body:  # `in`, not `.get() is not None` — explicit null must 422, not no-op
-            value = body[key]
-            if not isinstance(value, str):
-                raise HTTPException(status_code=422, detail=PreferencesError.INVALID_INPUT)
-            updates[key] = value
+    updates: dict[str, str] = sent
 
     try:
         prefs = await run_sync(svc.update_preferences, user.id, **updates)
     except ValueError:
         raise HTTPException(status_code=422, detail=PreferencesError.INVALID_INPUT) from None
-    return JSONResponse(prefs.model_dump())
+    return prefs

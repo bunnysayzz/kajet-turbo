@@ -1,5 +1,6 @@
 <script lang="ts">
   import { apiLoginApiLoginPost } from '$lib/api';
+  import { apiErrorMessage } from '$lib/api/mutate';
 
   let {
     pendingId = '',
@@ -21,13 +22,16 @@
     submitting = true;
     error = '';
     try {
-      const result = await apiLoginApiLoginPost({
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, pending_id: pendingId }),
-      });
+      const result = await apiLoginApiLoginPost({ email, password, pending_id: pendingId });
+      // customFetch (api/fetcher.ts) throws on any non-2xx response before returning here,
+      // so this branch is unreachable at runtime -- it exists to narrow the generated
+      // client's ErrorResponse | LoginResponse union for TypeScript. Route it through
+      // apiErrorMessage (not a bare `throw new Error()`) so it'd surface the translated
+      // AuthError code if that invariant ever stops holding.
+      if (result.status !== 200) throw new Error(apiErrorMessage(result, 'Błąd logowania.'));
       onSuccess(result.data);
-    } catch {
-      error = 'Błąd sieci. Spróbuj ponownie.';
+    } catch (e) {
+      error = apiErrorMessage(e, 'Błąd sieci. Spróbuj ponownie.');
     } finally {
       submitting = false;
     }

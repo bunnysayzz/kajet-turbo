@@ -1,10 +1,23 @@
-from .auth import ConsentResponse, LoginResponse, OkResponse, PendingInfoResponse, SessionResponse
+from .auth import (
+    ConsentRequest,
+    ConsentResponse,
+    LoginRequest,
+    LoginResponse,
+    OkResponse,
+    PendingInfoResponse,
+    SessionResponse,
+)
 from .backfill import (
     ApplyTemporalBackfillRequest,
     ApplyTemporalBackfillResponse,
     TemporalBackfillPreviewResponse,
 )
-from .embedding import EmbeddingProfileItem, EmbeddingProfilesResponse
+from .embedding import (
+    CreateEmbeddingProfileRequest,
+    EmbeddingProfileItem,
+    EmbeddingProfilesResponse,
+    UpdateEmbeddingProfileRequest,
+)
 from .errors import ErrorResponse
 from .jobs import JobItem, JobsResponse
 from .notes import (
@@ -41,15 +54,23 @@ from .notes import (
     WikilinkWarning,
     WorkspaceContentsResponse,
 )
-from .preferences import UserPreferences
-from .ssh_keys import SshKeyItem, SshKeysResponse
-from .workspace_remote import WorkspaceRemoteResponse, WorkspaceRemoteView
+from .preferences import UpdatePreferencesRequest, UserPreferences
+from .ssh_keys import CreateSshKeyRequest, SshKeyItem, SshKeysResponse
+from .workspace_remote import (
+    SetWorkspaceRemoteRequest,
+    WorkspaceRemoteResponse,
+    WorkspaceRemoteView,
+)
 from .workspaces import (
+    CreateWorkspaceRequest,
     CreateWorkspaceResponse,
     DeleteWorkspaceResponse,
     SettingDefinition,
+    UpdateWorkspaceRequest,
     UpdateWorkspaceResponse,
+    UpdateWorkspaceSettingsRequest,
     UpdateWorkspaceSettingsResponse,
+    UpdateWorkspaceSettingsValues,
     WorkspaceInfo,
     WorkspaceSettingsResponse,
     WorkspacesListResponse,
@@ -62,11 +83,15 @@ __all__ = [
     "BatchCreateNotesResponse",
     "ChunkPreviewItem",
     "ChunkPreviewResponse",
+    "ConsentRequest",
     "ConsentResponse",
+    "CreateEmbeddingProfileRequest",
     "CreateFolderRequest",
     "CreateFolderResponse",
     "CreateNoteRequest",
     "CreateNoteResponse",
+    "CreateSshKeyRequest",
+    "CreateWorkspaceRequest",
     "CreateWorkspaceResponse",
     "DeleteNoteResponse",
     "DeleteWorkspaceResponse",
@@ -79,6 +104,7 @@ __all__ = [
     "JobItem",
     "JobsResponse",
     "LinksResponse",
+    "LoginRequest",
     "LoginResponse",
     "MoveNoteRequest",
     "MoveNoteResponse",
@@ -95,17 +121,23 @@ __all__ = [
     "ReindexResponse",
     "RestoreVersionResponse",
     "SessionResponse",
+    "SetWorkspaceRemoteRequest",
     "SettingDefinition",
     "SshKeyItem",
     "SshKeysResponse",
     "TagNode",
     "TagsResponse",
     "TemporalBackfillPreviewResponse",
+    "UpdateEmbeddingProfileRequest",
     "UpdateFolderMetaRequest",
     "UpdateNoteRequest",
     "UpdateNoteResponse",
+    "UpdatePreferencesRequest",
+    "UpdateWorkspaceRequest",
     "UpdateWorkspaceResponse",
+    "UpdateWorkspaceSettingsRequest",
     "UpdateWorkspaceSettingsResponse",
+    "UpdateWorkspaceSettingsValues",
     "UserPreferences",
     "WikilinkWarning",
     "WorkspaceContentsResponse",
