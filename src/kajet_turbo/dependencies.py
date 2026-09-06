@@ -138,6 +138,7 @@ class AppResources:
     note_temporal_service: NoteTemporalService
     note_read_service: NoteReadService
     note_reconcile_service: NoteReconcileService
+    note_search_service: NoteSearchService
     workspace_service: WorkspaceService
     target_resolver: TargetResolver
     collection_service: CollectionService
@@ -252,7 +253,7 @@ def build_resources(config: AppConfig) -> AppResources:
             reconcile_repo=reconcile_repo,
         )
         shared_embed_client = SharedEmbedderClient()
-        search_service = NoteSearchService(
+        note_search_service = NoteSearchService(
             note_chunk_repo,
             profile_resolver.resolve_backend,
             pooled_embedder_factory(),
@@ -272,7 +273,6 @@ def build_resources(config: AppConfig) -> AppResources:
             note_chunk_repo,
             tag_service,
             link_service,
-            search_service,
             NoteVersionService(note_repo),
             folder_service,
             indexer=indexer,
@@ -331,6 +331,7 @@ def build_resources(config: AppConfig) -> AppResources:
             note_temporal_service,
             note_read_service,
             note_reconcile_service,
+            note_search_service,
             workspace_service,
             TargetResolver(note_repo, workspace_service),
             CollectionService(note_repo, note_service),
