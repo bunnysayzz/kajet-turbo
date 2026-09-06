@@ -93,20 +93,28 @@ def build_reindex_handler(database, workspaces_dir: str, jobs=None):
     )
 
 
-def drain_reindex_jobs(jobs, handler, owner_id: str, workspace_name: str) -> int:
-    """Run every pending ``reindex_note`` job for ``(owner_id, workspace_name)`` through
+def drain_reindex_jobs(
+    jobs, handler, owner_id: str, workspace_name: str, *, worker_id: str = "test-drain"
+) -> int:
+    """Run every runnable ``reindex_note`` job for ``(owner_id, workspace_name)`` through
     ``handler`` synchronously and mark it complete — the test-side stand-in for the real
     worker loop, so a test can assert post-batch chunk/FTS state without a real worker.
+    Claims each job first (like ``run_worker`` does) so the fenced complete() path is
+    exercised; anything claimed that is not ours is released back afterwards.
     Returns how many jobs were drained."""
-    pending = [
-        job
-        for job in jobs.list_jobs(owner_id, kind="reindex_note", status="pending")
-        if json.loads(job.payload)["workspace"] == workspace_name
-    ]
-    for job in pending:
-        handler(json.loads(job.payload))
-        jobs.complete(job.id)
-    return len(pending)
+    drained = 0
+    seen: set[str] = set()
+    while True:
+        job = jobs.claim(worker_id)
+        if job is None or job.id in seen:
+            break
+        seen.add(job.id)
+        if job.kind == "reindex_note" and json.loads(job.payload)["workspace"] == workspace_name:
+            handler(json.loads(job.payload))
+            assert jobs.complete(job.id, job.locked_by) is True
+            drained += 1
+    jobs.reset_running_to_pending(worker_id)
+    return drained
 
 
 def build_note_reconcile_service_from(service):

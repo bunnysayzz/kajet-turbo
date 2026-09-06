@@ -342,19 +342,33 @@ class JobRepository(DbRepository):
             operation.report_count(count)
             return count
 
-    def complete(self, job_id: str, *, now: float | None = None) -> None:
+    def complete(self, job_id: str, worker_id: str, *, now: float | None = None) -> bool:
+        """Mark a claimed job done. Returns True, or False when the row was already
+        reclaimed by another worker — the write is then a no-op (#334). Only the
+        current lock holder may transition the row: the WHERE clause fences on
+        ``locked_by`` so a starved worker's late write cannot clobber the new
+        owner's work."""
         now = time.time() if now is None else now
         with self.operation("complete", job_id=job_id) as operation:
             session = operation.session
-            session.execute(  # ty: ignore[deprecated] - raw SQL
-                text("UPDATE jobs SET status='done', updated_at=:now WHERE id=:id"),
-                {"now": now, "id": job_id},
+            result = session.execute(  # ty: ignore[deprecated] - raw SQL
+                text(
+                    "UPDATE jobs SET status='done', updated_at=:now "
+                    "WHERE id=:id AND locked_by=:worker"
+                ),
+                {"now": now, "id": job_id, "worker": worker_id},
             )
             session.commit()
+            if result.rowcount == 0:  # ty: ignore[unresolved-attribute] - CursorResult has rowcount; ty loses it through Result[Any]
+                operation.outcome = "superseded"
+                operation.add_fields(worker_id=worker_id)
+                return False
+            return True
 
     def fail(
         self,
         job_id: str,
+        worker_id: str,
         error: str,
         *,
         now: float | None = None,
@@ -362,7 +376,9 @@ class JobRepository(DbRepository):
         max_backoff: float = 300.0,
     ) -> str | None:
         """Record a handler failure. Returns the job's resulting status
-        (``"failed"`` or ``"pending"``), or ``None`` if the job no longer exists."""
+        (``"failed"`` or ``"pending"``), ``None`` if the job no longer exists,
+        or ``"superseded"`` when the row was already reclaimed by another
+        worker — the write is then a no-op (#334)."""
         now = time.time() if now is None else now
         with self.operation("fail", job_id=job_id) as operation:
             session = operation.session
@@ -370,6 +386,10 @@ class JobRepository(DbRepository):
             if job is None:
                 operation.suppress_log()
                 return None
+            if job.locked_by != worker_id:
+                operation.outcome = "superseded"
+                operation.add_fields(worker_id=worker_id, locked_by=job.locked_by)
+                return "superseded"
             job.attempts += 1
             job.last_error = error
             job.updated_at = now
@@ -386,17 +406,27 @@ class JobRepository(DbRepository):
             operation.add_fields(kind=job.kind, attempts=job.attempts)
             return job.status
 
-    def fail_terminal(self, job_id: str, error: str, *, now: float | None = None) -> None:
+    def fail_terminal(
+        self, job_id: str, worker_id: str, error: str, *, now: float | None = None
+    ) -> bool:
+        """Fail a job without retry. Returns True, or False when the row was already
+        reclaimed by another worker — the write is then a no-op (#334)."""
         now = time.time() if now is None else now
         with self.operation("fail_terminal", job_id=job_id) as operation:
             session = operation.session
-            session.execute(  # ty: ignore[deprecated] - raw SQL
+            result = session.execute(  # ty: ignore[deprecated] - raw SQL
                 text(
-                    "UPDATE jobs SET status='failed', last_error=:err, updated_at=:now WHERE id=:id"
+                    "UPDATE jobs SET status='failed', last_error=:err, updated_at=:now "
+                    "WHERE id=:id AND locked_by=:worker"
                 ),
-                {"err": error, "now": now, "id": job_id},
+                {"err": error, "now": now, "id": job_id, "worker": worker_id},
             )
             session.commit()
+            if result.rowcount == 0:  # ty: ignore[unresolved-attribute] - CursorResult has rowcount; ty loses it through Result[Any]
+                operation.outcome = "superseded"
+                operation.add_fields(worker_id=worker_id)
+                return False
+            return True
 
     def reset_running_to_pending(self, worker_id: str, *, now: float | None = None) -> int:
         now = time.time() if now is None else now

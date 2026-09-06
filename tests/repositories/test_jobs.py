@@ -253,6 +253,47 @@ def test_claim_reclaims_stale_running_job(database: Database):
     assert _get_required(database.engine, job_id).locked_by == "worker-b"
 
 
+def test_terminal_writes_fenced_by_locked_by(database: Database, capsys):
+    """#334: a starved worker's late terminal write must no-op once the row is
+    reclaimed — keyed by id alone it would silently clobber the new owner's work."""
+    from kajet_turbo.log import setup_logging
+
+    setup_logging()
+    repo = JobRepository(database.engine)
+    job_id = repo.enqueue("k", {}, max_attempts=5, now=1000.0)
+    claimed_a = repo.claim("worker-a", now=1000.0)
+    assert claimed_a is not None and claimed_a.locked_by == "worker-a"
+    # heartbeat starved past stale_after -> worker-b legitimately reclaims
+    claimed_b = repo.claim("worker-b", now=1400.0, stale_after=300.0)
+    assert claimed_b is not None and claimed_b.locked_by == "worker-b"
+
+    # worker-a's late writes no-op instead of clobbering worker-b's claim
+    assert repo.complete(job_id, "worker-a", now=2000.0) is False
+    assert repo.fail(job_id, "worker-a", "late", now=2000.0) == "superseded"
+    assert repo.fail_terminal(job_id, "worker-a", "late", now=2000.0) is False
+    row = _get_required(database.engine, job_id)
+    assert row.status == "running"
+    assert row.locked_by == "worker-b"
+    assert row.attempts == 0
+    assert row.last_error is None
+
+    # the no-op path is logged, not silent
+    ops = {
+        e["operation"]: e["outcome"]
+        for e in entries_named(read_log_entries(capsys), "repository_operation")
+        if e.get("operation") in ("jobs.complete", "jobs.fail", "jobs.fail_terminal")
+    }
+    assert ops == {
+        "jobs.complete": "superseded",
+        "jobs.fail": "superseded",
+        "jobs.fail_terminal": "superseded",
+    }
+
+    # the rightful owner still transitions normally
+    assert repo.complete(job_id, "worker-b", now=2001.0) is True
+    assert _get_required(database.engine, job_id).status == "done"
+
+
 def test_renew_claim_resets_stale_window(database: Database):
     repo = JobRepository(database.engine)
     job_id = repo.enqueue("k", {}, now=1000.0)
@@ -355,7 +396,7 @@ def test_complete_marks_done(database: Database):
     repo = JobRepository(database.engine)
     job_id = repo.enqueue("k", {}, now=1000.0)
     repo.claim("w", now=1000.0)
-    repo.complete(job_id, now=1002.0)
+    repo.complete(job_id, "w", now=1002.0)
     assert _get_required(database.engine, job_id).status == "done"
 
 
@@ -363,7 +404,7 @@ def test_fail_retries_with_backoff_then_terminal(database: Database):
     repo = JobRepository(database.engine)
     job_id = repo.enqueue("k", {}, max_attempts=2, now=1000.0)
     repo.claim("w", now=1000.0)
-    repo.fail(job_id, "boom", now=1000.0)
+    repo.fail(job_id, "w", "boom", now=1000.0)
     row = _get_required(database.engine, job_id)
     assert row.status == "pending"
     assert row.attempts == 1
@@ -372,7 +413,7 @@ def test_fail_retries_with_backoff_then_terminal(database: Database):
     assert row.last_error == "boom"
     # second failure reaches max_attempts -> failed
     repo.claim("w", now=1002.0)
-    repo.fail(job_id, "boom2", now=1002.0)
+    repo.fail(job_id, "w", "boom2", now=1002.0)
     row = _get_required(database.engine, job_id)
     assert row.status == "failed"
     assert row.attempts == 2
@@ -382,7 +423,7 @@ def test_fail_terminal_fails_immediately(database: Database):
     repo = JobRepository(database.engine)
     job_id = repo.enqueue("k", {}, max_attempts=5, now=1000.0)
     repo.claim("w", now=1000.0)
-    repo.fail_terminal(job_id, "no handler for kind 'k'", now=1001.0)
+    repo.fail_terminal(job_id, "w", "no handler for kind 'k'", now=1001.0)
     row = _get_required(database.engine, job_id)
     assert row.status == "failed"
     assert row.last_error == "no handler for kind 'k'"
@@ -406,8 +447,16 @@ def test_reset_running_to_pending_scopes_to_worker(database: Database):
 
 def _make_failed(repo: JobRepository, engine, *, user_id: str, now: float = 1000.0) -> str:
     job_id = repo.enqueue("k", {}, user_id=user_id, dedup_key=None, max_attempts=1, now=now)
-    repo.claim("w", now=now)
-    repo.fail(job_id, "boom", now=now)  # max_attempts=1 -> failed
+    # claim() takes the most-overdue runnable row, which may be an older row from the
+    # calling test — drain those (like a real worker would) until holding our own job,
+    # since fail() is fenced on the lock holder (#334).
+    for _ in range(100):
+        claimed = repo.claim("w", now=now)
+        assert claimed is not None
+        if claimed.id == job_id:
+            break
+        assert repo.complete(claimed.id, claimed.locked_by, now=now) is True
+    repo.fail(job_id, "w", "boom", now=now)  # max_attempts=1 -> failed
     return job_id
 
 
@@ -479,7 +528,7 @@ def test_claim_serializes_same_dedup_key(database: Database):
     # b is pending and ready, but a (same dedup_key) is running -> not claimable yet
     assert repo.claim("w2", now=1002.0) is None
     # finish a -> b becomes claimable
-    repo.complete(a, now=1003.0)
+    repo.complete(a, "w1", now=1003.0)
     claimed_b = repo.claim("w2", now=1003.0)
     assert claimed_b is not None and claimed_b.id == b
 
@@ -504,16 +553,16 @@ def test_sweep_done_purges_old_done_jobs_only(database: Database):
     repo = JobRepository(database.engine)
     old_done = repo.enqueue("k", {}, now=1000.0)
     repo.claim("w1", now=1000.0)
-    repo.complete(old_done, now=1000.0)
+    repo.complete(old_done, "w1", now=1000.0)
 
     fresh_done = repo.enqueue("k", {}, now=90000.0)
     repo.claim("w1", now=90000.0)
-    repo.complete(fresh_done, now=90000.0)
+    repo.complete(fresh_done, "w1", now=90000.0)
 
     failed = repo.enqueue("k2", {}, now=1000.0, max_attempts=1)
     claimed = repo.claim("w1", now=1000.0)
     assert claimed is not None and claimed.id == failed
-    repo.fail(failed, "boom", now=1000.0)  # max_attempts=1 -> terminal failed
+    repo.fail(failed, "w1", "boom", now=1000.0)  # max_attempts=1 -> terminal failed
     pending = repo.enqueue("k", {}, now=1000.0)
 
     swept = repo.sweep_done(older_than=86400.0, now=90001.0)
@@ -553,7 +602,7 @@ def test_delete_for_workspace_targets_only_matching_owner_and_payload(database: 
         now=999.0,  # earlier than `pending` -> deterministically the next claim
     )
     repo.claim("w", now=999.0)
-    repo.fail(failed, "boom", now=999.0)  # max_attempts=1 -> terminal failed
+    repo.fail(failed, "w", "boom", now=999.0)  # max_attempts=1 -> terminal failed
     # different owner, same workspace name — must survive
     other_owner = repo.enqueue(
         "push_workspace", {"user_id": "u2", "workspace": "ws"}, user_id="u2", dedup_key="u2:ws"

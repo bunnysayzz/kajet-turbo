@@ -39,7 +39,7 @@ def test_retry_and_dismiss_delegate(database):
     repo = JobRepository(database.engine)
     job_id = repo.enqueue("k", {}, user_id="u1", max_attempts=1, now=1000.0)
     repo.claim("w", now=1000.0)
-    repo.fail(job_id, "boom", now=1000.0)  # -> failed
+    repo.fail(job_id, "w", "boom", now=1000.0)  # -> failed
     assert svc.retry("u1", job_id) is True
     assert svc.retry("u2", job_id) is False  # not owner
     # after retry it's pending -> dismiss rejects non-terminal

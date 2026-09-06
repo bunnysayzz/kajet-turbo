@@ -66,7 +66,11 @@ def run_job(repo: JobRepository, job: Job, registry: dict[str, Handler]) -> None
         if handler is None:
             outcome = "no_handler"
             level = "WARNING"
-            write(lambda: repo.fail_terminal(job.id, f"no handler for kind {job.kind!r}"))
+            write(
+                lambda: repo.fail_terminal(
+                    job.id, job.locked_by, f"no handler for kind {job.kind!r}"
+                )
+            )
         else:
             try:
                 handler(json.loads(job.payload))
@@ -74,17 +78,23 @@ def run_job(repo: JobRepository, job: Job, registry: dict[str, Handler]) -> None
                 error = exc
                 error_message = str(exc)
                 level = "WARNING"
-                status = write(lambda: repo.fail(job.id, error_message))
+                status = write(lambda: repo.fail(job.id, job.locked_by, error_message))
                 # A write failure leaves the job's real status unknown (the transaction
                 # rolled back), so it is not reported as either "failed" or "retrying".
                 if repo_error is not None:
                     outcome = "unknown"
+                elif status == "superseded":
+                    # Someone else reclaimed the row while this worker was starved;
+                    # their run owns the job now, so don't report this attempt at all.
+                    outcome = "superseded"
                 else:
                     outcome = "failed" if status == "failed" else "retrying"
             else:
-                outcome = "completed"
                 level = "INFO"
-                write(lambda: repo.complete(job.id))
+                applied = write(lambda: repo.complete(job.id, job.locked_by))
+                # applied is None on write failure (outcome stays "completed" with
+                # repo_write_failed=True, as before); False means reclaimed.
+                outcome = "completed" if applied is not False else "superseded"
 
         perf_fields = span.fields if span else {}
         log_error = repo_error or error
