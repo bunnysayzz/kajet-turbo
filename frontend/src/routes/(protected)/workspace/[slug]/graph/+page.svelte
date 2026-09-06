@@ -36,7 +36,9 @@
     <p class="graph-page__empty">Brak notatek w tym workspace’ie.</p>
   {:else}
     <section class="graph-page__canvas" aria-label="Graf notatek workspace’u">
-      <GraphView data={graph} onNodeClick={handleNodeClick} />
+      {#key graph}
+        <GraphView data={graph} onNodeClick={handleNodeClick} />
+      {/key}
     </section>
   {/if}
 </main>
