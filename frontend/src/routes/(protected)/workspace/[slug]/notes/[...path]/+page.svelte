@@ -6,6 +6,7 @@
   } from '$lib/api';
   import { apiErrorMessage } from '$lib/api/mutate';
   import {
+    graphPath,
     noteEditPath,
     noteInTreePath,
     notesPath,
@@ -87,6 +88,8 @@
         />
       {/if}
     </div>
+    <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+    <a class="explorer__graph" href={graphPath(slug)}>◎ Graf workspace’u</a>
     <a class="explorer__settings" href={workspaceSettingsPath(slug)}>⚙ Ustawienia</a>
   </aside>
 
@@ -178,6 +181,18 @@
       font-family: v.$font-mono;
       font-size: 0.72rem;
       color: v.$text-muted;
+      text-decoration: none;
+      &:hover {
+        color: v.$accent;
+      }
+    }
+
+    &__graph {
+      flex-shrink: 0;
+      padding: 10px 12px;
+      color: v.$text-muted;
+      font-family: v.$font-mono;
+      font-size: 0.72rem;
       text-decoration: none;
       &:hover {
         color: v.$accent;
