@@ -1,11 +1,22 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { browser } from '$app/environment';
-  import type { NoteLinkItem } from '$lib/api';
+  import { SvelteMap } from 'svelte/reactivity';
+  import {
+    apiNoteNeighborhoodApiWorkspacesNameNotesNoteIdNeighborhoodGet,
+    type GraphResponse,
+    type NoteLinkItem,
+  } from '$lib/api';
+  import GraphView from '$lib/components/GraphView.svelte';
+  import type { AnyGraphNode } from '$lib/graph/model';
   import type { OutlineItem } from '$lib/outline';
   import { noteInTreePath, tagsPath } from '$lib/routes';
 
+  type GraphDepth = 1 | 2;
+
   let {
     slug,
+    noteId,
     tags,
     outline,
     backlinks,
@@ -13,6 +24,7 @@
     showOutline = true,
   }: {
     slug: string;
+    noteId: string;
     tags: string[];
     outline: OutlineItem[];
     backlinks: NoteLinkItem[];
@@ -42,6 +54,77 @@
   const filteredOutlinks = $derived(
     showCrossWorkspace ? outlinks : outlinks.filter((l) => !l.workspace || l.workspace === slug),
   );
+
+  let relationView = $state<'lists' | 'graph'>('lists');
+  let graphDepth = $state<GraphDepth>(2);
+  let graphData = $state<GraphResponse | null>(null);
+  let graphLoading = $state(false);
+  let graphError = $state('');
+  let graphCache = new SvelteMap<string, GraphResponse>();
+  let graphRequest = 0;
+
+  function graphKey(depth: GraphDepth): string {
+    return `${noteId}:${depth}:${showCrossWorkspace ? 'xws' : 'local'}`;
+  }
+
+  function setGraphDepth(value: number): void {
+    graphDepth = value === 1 ? 1 : 2;
+  }
+
+  function handleGraphNodeClick(node: AnyGraphNode): void {
+    if (node.kind !== 'note') return;
+    goto(noteInTreePath(node.workspace ?? slug, node.folder, node.note_id));
+  }
+
+  // NotePreview keeps this component instance while switching notes. Drop all cached data and
+  // invalidate an in-flight response so a previous note's graph can never leak into the new one.
+  $effect(() => {
+    void noteId;
+    graphCache = new SvelteMap();
+    graphData = null;
+    graphError = '';
+    graphLoading = false;
+    graphRequest += 1;
+  });
+
+  // Fetch only when the graph view is opened. The cache key includes the xws setting because
+  // the backend traversal scope changes with that existing control.
+  $effect(() => {
+    if (relationView !== 'graph') return;
+
+    const key = graphKey(graphDepth);
+    const cached = graphCache.get(key);
+    if (cached) {
+      graphData = cached;
+      graphError = '';
+      return;
+    }
+
+    const request = ++graphRequest;
+    graphData = null;
+    graphLoading = true;
+    graphError = '';
+    apiNoteNeighborhoodApiWorkspacesNameNotesNoteIdNeighborhoodGet(slug, noteId, {
+      depth: graphDepth,
+      include_cross_workspace: showCrossWorkspace,
+      include_tags: true,
+    })
+      .then((result) => {
+        if (request !== graphRequest) return;
+        if (result.status !== 200) {
+          graphError = 'Nie udało się pobrać grafu.';
+          return;
+        }
+        graphCache.set(key, result.data);
+        graphData = result.data;
+      })
+      .catch(() => {
+        if (request === graphRequest) graphError = 'Nie udało się pobrać grafu.';
+      })
+      .finally(() => {
+        if (request === graphRequest) graphLoading = false;
+      });
+  });
 </script>
 
 {#if collapsed}
@@ -87,46 +170,88 @@
       </div>
     {/if}
 
-    {#if filteredBacklinks.length > 0}
-      <div class="meta__section">
-        <h4 class="meta__heading">Backlinki ({filteredBacklinks.length})</h4>
-        <ul class="meta__list">
-          {#each filteredBacklinks as link (link.note_id)}
-            <li>
-              <a
-                href={noteInTreePath(link.workspace ?? slug, link.folder, link.note_id)}
-                class="meta__link"
-              >
-                {#if link.workspace && link.workspace !== slug}
-                  <span class="meta__xws">[{link.workspace}]</span>
-                {/if}
-                {#if link.folder}<span class="meta__folder">{link.folder}/</span>{/if}{link.title}
-              </a>
-            </li>
-          {/each}
-        </ul>
+    <div class="meta__section meta__relation-switcher">
+      <h4 class="meta__heading">Relacje</h4>
+      <div class="meta__view-toggle" role="group" aria-label="Widok relacji">
+        <button
+          class:meta__view-toggle--active={relationView === 'lists'}
+          aria-pressed={relationView === 'lists'}
+          onclick={() => (relationView = 'lists')}>Listy</button
+        >
+        <button
+          class:meta__view-toggle--active={relationView === 'graph'}
+          aria-pressed={relationView === 'graph'}
+          onclick={() => (relationView = 'graph')}>Graf</button
+        >
       </div>
-    {/if}
+    </div>
 
-    {#if filteredOutlinks.length > 0}
-      <div class="meta__section">
-        <h4 class="meta__heading">Wychodzące ({filteredOutlinks.length})</h4>
-        <ul class="meta__list">
-          {#each filteredOutlinks as link (link.note_id)}
-            <li>
-              <a
-                href={noteInTreePath(link.workspace ?? slug, link.folder, link.note_id)}
-                class="meta__link"
-              >
-                {#if link.workspace && link.workspace !== slug}
-                  <span class="meta__xws">[{link.workspace}]</span>
-                {/if}
-                {#if link.folder}<span class="meta__folder">{link.folder}/</span>{/if}{link.title}
-              </a>
-            </li>
-          {/each}
-        </ul>
+    {#if relationView === 'graph'}
+      <div class="meta__section meta__graph-section">
+        <label class="meta__depth">
+          <span>Głębokość</span>
+          <select
+            value={graphDepth}
+            aria-label="Głębokość grafu"
+            onchange={(event) =>
+              setGraphDepth(Number((event.currentTarget as HTMLSelectElement).value))}
+          >
+            <option value="1">1 hop</option>
+            <option value="2">2 hop-y</option>
+          </select>
+        </label>
+        {#if graphLoading}
+          <p class="meta__status">Ładowanie grafu…</p>
+        {:else if graphError}
+          <p class="meta__status meta__status--error">{graphError}</p>
+        {:else if graphData}
+          {#key graphKey(graphDepth)}
+            <GraphView data={graphData} onNodeClick={handleGraphNodeClick} />
+          {/key}
+        {/if}
       </div>
+    {:else}
+      {#if filteredBacklinks.length > 0}
+        <div class="meta__section">
+          <h4 class="meta__heading">Backlinki ({filteredBacklinks.length})</h4>
+          <ul class="meta__list">
+            {#each filteredBacklinks as link (link.note_id)}
+              <li>
+                <a
+                  href={noteInTreePath(link.workspace ?? slug, link.folder, link.note_id)}
+                  class="meta__link"
+                >
+                  {#if link.workspace && link.workspace !== slug}
+                    <span class="meta__xws">[{link.workspace}]</span>
+                  {/if}
+                  {#if link.folder}<span class="meta__folder">{link.folder}/</span>{/if}{link.title}
+                </a>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+
+      {#if filteredOutlinks.length > 0}
+        <div class="meta__section">
+          <h4 class="meta__heading">Wychodzące ({filteredOutlinks.length})</h4>
+          <ul class="meta__list">
+            {#each filteredOutlinks as link (link.note_id)}
+              <li>
+                <a
+                  href={noteInTreePath(link.workspace ?? slug, link.folder, link.note_id)}
+                  class="meta__link"
+                >
+                  {#if link.workspace && link.workspace !== slug}
+                    <span class="meta__xws">[{link.workspace}]</span>
+                  {/if}
+                  {#if link.folder}<span class="meta__folder">{link.folder}/</span>{/if}{link.title}
+                </a>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
     {/if}
   </aside>
 {/if}
@@ -226,6 +351,67 @@
       padding: v.$space-md 12px;
       & + & {
         border-top: 1px solid v.$border;
+      }
+    }
+
+    &__relation-switcher {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: v.$space-sm;
+    }
+
+    &__view-toggle {
+      display: flex;
+      gap: 2px;
+
+      button {
+        border: 1px solid v.$border;
+        background: v.$bg-surface;
+        color: v.$text-muted;
+        cursor: pointer;
+        font-family: v.$font-mono;
+        font-size: 0.65rem;
+        padding: 3px 5px;
+
+        &:hover,
+        &.meta__view-toggle--active {
+          border-color: v.$border-accent;
+          color: v.$text-primary;
+        }
+      }
+    }
+
+    &__graph-section {
+      min-width: 0;
+    }
+
+    &__depth {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: v.$space-sm;
+      margin-bottom: v.$space-sm;
+      color: v.$text-muted;
+      font-family: v.$font-mono;
+      font-size: 0.68rem;
+
+      select {
+        border: 1px solid v.$border;
+        background: v.$bg-surface;
+        color: v.$text-secondary;
+        font: inherit;
+        padding: 2px 3px;
+      }
+    }
+
+    &__status {
+      color: v.$text-muted;
+      font-family: v.$font-mono;
+      font-size: 0.75rem;
+
+      &--error {
+        color: v.$error;
       }
     }
 
