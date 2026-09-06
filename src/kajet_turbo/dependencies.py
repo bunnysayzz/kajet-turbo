@@ -200,6 +200,7 @@ def build_resources(config: AppConfig) -> AppResources:
         note_link_repo = NoteLinkRepository(db.engine)
         note_tag_repo = NoteTagRepository(db.engine)
         note_chunk_repo = NoteChunkRepository(db.engine)
+        note_share_link_repo = NoteShareLinkRepository(db.engine)
         user_repo = UserRepository(db.engine)
         session_repo = SessionRepository(db.engine)
         workspace_repo = WorkspaceRepository(db.engine)
@@ -255,6 +256,7 @@ def build_resources(config: AppConfig) -> AppResources:
             note_tag_repo,
             note_chunk_repo,
             link_service,
+            note_share_link_repo,
             indexer=indexer,
             reconcile_repo=reconcile_repo,
         )
@@ -282,6 +284,7 @@ def build_resources(config: AppConfig) -> AppResources:
             tag_service,
             link_service,
             note_version_service,
+            note_share_link_repo,
             indexer=indexer,
             reconcile_repo=reconcile_repo,
         )

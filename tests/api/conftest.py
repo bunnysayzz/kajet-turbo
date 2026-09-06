@@ -131,6 +131,7 @@ def api_client_factory(
             NoteTagRepository(database.engine),
             note_chunk_repository,
             note_link_service,
+            NoteShareLinkRepository(database.engine),
             indexer=note_indexer,
         )
         workspace_service = WorkspaceService(
