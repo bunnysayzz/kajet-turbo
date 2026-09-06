@@ -66,6 +66,7 @@ def build_note_service(
     async_build_embedder=None,
     reconcile_repo: LinkReconcileRepository | None = None,
     jobs: JobRepository | None = None,
+    link_service: NoteLinkService | None = None,
 ) -> NoteService:
     """Construct a fully-wired NoteService from a Database for tests."""
     engine = database.engine
@@ -77,10 +78,11 @@ def build_note_service(
     if jobs is None:
         jobs = JobRepository(engine)
 
-    tag_service = NoteTagService(crud_repo, tag_repo)
-    link_service = NoteLinkService(
-        crud_repo, link_repo, tag_repo, dangling_repo, link_validation_enabled, jobs
-    )
+    tag_service = NoteTagService(crud_repo, tag_repo, indexer)
+    if link_service is None:
+        link_service = NoteLinkService(
+            crud_repo, link_repo, tag_repo, dangling_repo, link_validation_enabled, jobs
+        )
     search_service = NoteSearchService(
         chunk_repo,
         query_resolver,
@@ -156,6 +158,12 @@ def service(database: Database) -> NoteService:
         jobs=JobRepository(database.engine),
     )
     return build_note_service(database, indexer=indexer)
+
+
+@pytest.fixture
+def tag_service(service: NoteService) -> NoteTagService:
+    """The concrete tag boundary paired with the note writer in service tests."""
+    return service._tag_service
 
 
 @pytest.fixture
