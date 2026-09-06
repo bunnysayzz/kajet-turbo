@@ -1,10 +1,7 @@
-import re
-from pathlib import Path
-
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends
 
 from kajet_turbo.api.schemas import (
+    CreateFolderRequest,
     CreateFolderResponse,
     FolderMetaResponse,
     UpdateFolderMetaRequest,
@@ -14,17 +11,14 @@ from kajet_turbo.concurrency import run_sync
 from kajet_turbo.dependencies import (
     CurrentUser,
     get_folder_meta_repo,
+    get_note_service,
     get_required_user,
-    get_workspace_service,
+    resolve_workspace_target,
 )
-from kajet_turbo.errors import AuthError, FolderError
-from kajet_turbo.log import logger
 from kajet_turbo.repositories.folder_meta import FolderMetaRepository
-from kajet_turbo.repositories.git import GitError, GitRepository
-from kajet_turbo.services.workspaces import WorkspaceService
+from kajet_turbo.services.notes import NoteService
+from kajet_turbo.services.targets import WorkspaceTarget
 from kajet_turbo.workspace import normalize_folder
-
-_FOLDER_PATH_RE = re.compile(r"^[a-zA-Z0-9._-][a-zA-Z0-9._\-/]*$")
 
 router = APIRouter(
     responses={
@@ -34,23 +28,6 @@ router = APIRouter(
 )
 
 
-def _create_folder_marker(ws_path: str, path: str) -> None:
-    repo = GitRepository(ws_path)
-    ws_root = Path(ws_path).resolve()
-    gitkeep = ws_root / path / ".gitkeep"
-    with repo.transaction():
-        gitkeep.parent.mkdir(parents=True, exist_ok=True)
-        if gitkeep.exists():
-            return
-        gitkeep.touch()
-        relative = str(gitkeep.relative_to(ws_root))
-        try:
-            repo.commit_file(relative, f"folder: add {path}")
-        except GitError:
-            gitkeep.unlink(missing_ok=True)
-            raise
-
-
 @router.post(
     "/api/workspaces/{name}/folders",
     response_model=CreateFolderResponse,
@@ -58,37 +35,13 @@ def _create_folder_marker(ws_path: str, path: str) -> None:
 )
 async def api_create_folder(
     name: str,
-    request: Request,
+    body: CreateFolderRequest,
     user: CurrentUser = Depends(get_required_user),
-    ws_service: WorkspaceService = Depends(get_workspace_service),
-) -> JSONResponse:
-    if not await run_sync(ws_service.has_access, user.id, name):
-        raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED)
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail=FolderError.PATH_REQUIRED) from None
-    path = str(body.get("path", "")).strip().strip("/")
-    if not path:
-        raise HTTPException(status_code=422, detail=FolderError.PATH_REQUIRED)
-    segments = path.split("/")
-    if any(not s or s in (".", "..") for s in segments):
-        raise HTTPException(status_code=422, detail=FolderError.PATH_INVALID)
-    if not _FOLDER_PATH_RE.match(path):
-        raise HTTPException(status_code=422, detail=FolderError.PATH_INVALID)
-    ws_path = ws_service.workspace_path(user.id, name)
-    ws_root = Path(ws_path).resolve()
-    target = (ws_root / path).resolve()
-    try:
-        target.relative_to(ws_root)
-    except ValueError:
-        raise HTTPException(status_code=422, detail=FolderError.PATH_INVALID) from None
-    try:
-        await run_sync(_create_folder_marker, ws_path, path)
-    except GitError as e:
-        raise HTTPException(status_code=500, detail={"error": "GIT_ERROR", "detail": str(e)}) from e
-    logger.info("folder_created", ws=name, path=path)
-    return JSONResponse({"path": path})
+    workspace: WorkspaceTarget = Depends(resolve_workspace_target),
+    note_service: NoteService = Depends(get_note_service),
+) -> CreateFolderResponse:
+    path = await run_sync(note_service.create_folder, workspace, body.path)
+    return CreateFolderResponse(path=path)
 
 
 @router.get(
@@ -99,11 +52,9 @@ async def api_get_folder_meta(
     name: str,
     path: str,
     user: CurrentUser = Depends(get_required_user),
-    ws_service: WorkspaceService = Depends(get_workspace_service),
+    workspace: WorkspaceTarget = Depends(resolve_workspace_target),
     meta_repo: FolderMetaRepository = Depends(get_folder_meta_repo),
 ) -> FolderMetaResponse:
-    if not await run_sync(ws_service.has_access, user.id, name):
-        raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED)
     norm = normalize_folder(path)
     row = await run_sync(meta_repo.get, user.id, name, norm)
     return FolderMetaResponse(
@@ -122,11 +73,9 @@ async def api_update_folder_meta(
     path: str,
     body: UpdateFolderMetaRequest,
     user: CurrentUser = Depends(get_required_user),
-    ws_service: WorkspaceService = Depends(get_workspace_service),
+    workspace: WorkspaceTarget = Depends(resolve_workspace_target),
     meta_repo: FolderMetaRepository = Depends(get_folder_meta_repo),
 ) -> FolderMetaResponse:
-    if not await run_sync(ws_service.has_access, user.id, name):
-        raise HTTPException(status_code=403, detail=AuthError.ACCESS_DENIED)
     norm = normalize_folder(path)
     await run_sync(
         meta_repo.set,

@@ -1,6 +1,8 @@
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic_core import PydanticCustomError
 
 from kajet_turbo.shared.notes import (
     FolderContext,
@@ -10,6 +12,18 @@ from kajet_turbo.shared.notes import (
     TemporalWarning,
     WikilinkWarning,
 )
+
+_FOLDER_PATH_RE = re.compile(r"^[a-zA-Z0-9._-][a-zA-Z0-9._\-/]*$")
+
+
+def _require_title(v: str) -> str:
+    """Shared by CreateNoteRequest and its batch items -- rejects a *present but blank*
+    title. A missing title key never reaches this validator (required, no default) and
+    is mapped back to NOTE_TITLE_REQUIRED by api/errors.py's required-field table instead."""
+    stripped = v.strip()
+    if not stripped:
+        raise PydanticCustomError("note_title_required", "Title is required")
+    return stripped
 
 
 class NoteItem(NoteListItem):
@@ -25,12 +39,19 @@ class EntriesInResponse(BaseModel):
 
 
 class CreateNoteRequest(BaseModel):
-    title: str
+    # REST policy: unknown fields are dropped rather than rejected (MCP's ToolInput
+    # keeps extra="forbid" -- an LLM caller benefits from a hard error on a typo, a REST
+    # client tolerating an extra field does not).
+    model_config = ConfigDict(extra="ignore")
+
+    title: str = Field(min_length=1, description="Note title; unique within (workspace, folder)")
     content: str = ""
     folder: str = ""
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     occurred_at: str | None = None
     period: str | None = None
+
+    _validate_title = field_validator("title")(_require_title)
 
 
 class CreateNoteResponse(BaseModel):
@@ -39,6 +60,8 @@ class CreateNoteResponse(BaseModel):
 
 
 class UpdateNoteRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     title: str | None = None
     content: str | None = None
     folder: str | None = None
@@ -46,6 +69,11 @@ class UpdateNoteRequest(BaseModel):
     occurred_at: str | None = None
     period: str | None = None
     clear_date_metadata: bool = False
+    expected_sha: str | None = Field(
+        default=None,
+        description="The note's current HEAD sha from get_note_history -- a stale or "
+        "missing value is rejected with 409 NOTE_STALE_VERSION.",
+    )
 
 
 class UpdateNoteResponse(BaseModel):
@@ -66,15 +94,6 @@ class DeleteNoteResponse(BaseModel):
     ok: bool
 
 
-class NoteCreate(BaseModel):
-    title: str
-    content: str = ""
-    tags: list[str] = []
-    folder: str = ""
-    occurred_at: str | None = None
-    period: str | None = None
-
-
 class NoteResult(BaseModel):
     index: int
     note_id: str | None = None
@@ -83,7 +102,7 @@ class NoteResult(BaseModel):
 
 
 class BatchCreateNotesRequest(BaseModel):
-    notes: list[NoteCreate]
+    notes: list[CreateNoteRequest] = Field(min_length=1, max_length=50)
 
 
 class BatchCreateNotesResponse(BaseModel):
@@ -118,6 +137,19 @@ class TagsResponse(BaseModel):
 
 class CreateFolderRequest(BaseModel):
     path: str
+
+    @field_validator("path")
+    @classmethod
+    def _validate_path(cls, v: str) -> str:
+        path = v.strip().strip("/")
+        if not path:
+            raise PydanticCustomError("folder_path_required", "Path is required")
+        segments = path.split("/")
+        if any(not s or s in (".", "..") for s in segments):
+            raise PydanticCustomError("folder_path_invalid", "Invalid folder path")
+        if not _FOLDER_PATH_RE.match(path):
+            raise PydanticCustomError("folder_path_invalid", "Invalid folder path")
+        return path
 
 
 class CreateFolderResponse(BaseModel):

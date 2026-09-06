@@ -1,12 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException
 
 from kajet_turbo.api.schemas import (
+    BatchCreateNotesRequest,
     BatchCreateNotesResponse,
+    CreateNoteRequest,
     CreateNoteResponse,
     DeleteNoteResponse,
+    MoveNoteRequest,
     MoveNoteResponse,
+    NoteResult,
     NotesListResponse,
+    UpdateNoteRequest,
     UpdateNoteResponse,
 )
 from kajet_turbo.api.schemas.errors import ErrorResponse
@@ -21,9 +25,8 @@ from kajet_turbo.dependencies import (
     resolve_note_target,
     resolve_workspace_target,
 )
-from kajet_turbo.errors import FolderError, NoteError
+from kajet_turbo.errors import NoteError
 from kajet_turbo.markdown import BrokenWikilinkError, EditSpec
-from kajet_turbo.repositories.git import GitError  # exception class, not errors.GitError StrEnum
 from kajet_turbo.services.notes import NoteReadService, NoteService, NoteTagService
 from kajet_turbo.services.targets import NoteTarget, WorkspaceTarget
 from kajet_turbo.workspace import InvalidFolderError, TemporalMetadataError, temporal_kwargs
@@ -50,14 +53,14 @@ def api_list_notes(
     folder: str | None = None,
     tag: str | None = None,
     include_descendants: bool = True,
-) -> JSONResponse:
+) -> NotesListResponse:
     if tag is not None:
         notes = tag_service.notes_by_tag(
             name, user.id, tag, include_descendants=include_descendants
         )
     else:
         notes = note_read_service.list_notes(workspace, folder=folder, limit=None)
-    return JSONResponse({"notes": enrich_note_items(str(workspace.path), notes)})
+    return NotesListResponse(notes=enrich_note_items(str(workspace.path), notes))
 
 
 @router.post(
@@ -68,50 +71,28 @@ def api_list_notes(
 )
 async def api_create_note(
     name: str,
-    request: Request,
+    body: CreateNoteRequest,
     user: CurrentUser = Depends(get_required_user),
     workspace: WorkspaceTarget = Depends(resolve_workspace_target),
     note_service: NoteService = Depends(get_note_service),
-) -> JSONResponse:
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail=NoteError.INVALID_INPUT) from None
-    title = str(body.get("title", "")).strip()
-    if not title:
-        raise HTTPException(status_code=422, detail=NoteError.TITLE_REQUIRED)
-    content = str(body.get("content", ""))
-    folder = str(body.get("folder", ""))
-    tags = body.get("tags", [])
-    if not isinstance(tags, list):
-        tags = []
+) -> CreateNoteResponse:
+    # BrokenWikilinkError/TemporalMetadataError are ValueError subclasses with their own
+    # app-level handlers (api/errors.py) -- letting them propagate rather than catching
+    # ValueError here keeps them mapped to their specific codes instead of ALREADY_EXISTS.
     try:
         result = await run_sync(
             note_service.save,
             workspace,
-            title,
-            content,
-            tags,
-            folder=folder,
-            occurred_at=body.get("occurred_at"),
-            period=body.get("period"),
+            body.title,
+            body.content,
+            body.tags,
+            folder=body.folder,
+            occurred_at=body.occurred_at,
+            period=body.period,
         )
-    except BrokenWikilinkError as e:
-        raise HTTPException(
-            status_code=422,
-            detail={"error": str(NoteError.BROKEN_WIKILINK), "detail": str(e)},
-        ) from e
-    except TemporalMetadataError as e:
-        raise HTTPException(status_code=422, detail=NoteError.INVALID_INPUT) from e
-    except ValueError, FileExistsError:
+    except FileExistsError:
         raise HTTPException(status_code=409, detail=NoteError.ALREADY_EXISTS) from None
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": str(NoteError.INVALID_INPUT), "detail": str(e)}
-        ) from e
-    return JSONResponse(
-        {"note_id": result["note_id"], "warnings": result["warnings"]}, status_code=201
-    )
+    return CreateNoteResponse(note_id=result["note_id"], warnings=result["warnings"])
 
 
 @router.post(
@@ -121,25 +102,15 @@ async def api_create_note(
 )
 async def api_create_notes_batch(
     name: str,
-    request: Request,
+    body: BatchCreateNotesRequest,
     user: CurrentUser = Depends(get_required_user),
     workspace: WorkspaceTarget = Depends(resolve_workspace_target),
     note_service: NoteService = Depends(get_note_service),
-) -> JSONResponse:
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail=NoteError.INVALID_INPUT) from None
-    notes = body.get("notes")
-    if not isinstance(notes, list) or not notes:
-        raise HTTPException(status_code=422, detail=NoteError.INVALID_INPUT)
-    try:
-        results = await run_sync(note_service.save_many, workspace, notes)
-    except GitError as e:
-        raise HTTPException(
-            status_code=500, detail={"error": str(NoteError.INVALID_INPUT), "detail": str(e)}
-        ) from e
-    return JSONResponse({"results": results}, status_code=200)
+) -> BatchCreateNotesResponse:
+    results = await run_sync(
+        note_service.save_many, workspace, [note.model_dump() for note in body.notes]
+    )
+    return BatchCreateNotesResponse(results=[NoteResult(**r) for r in results])
 
 
 @router.patch(
@@ -154,44 +125,32 @@ async def api_create_notes_batch(
 async def api_update_note(
     name: str,
     note_id: str,
-    request: Request,
+    body: UpdateNoteRequest,
     user: CurrentUser = Depends(get_required_user),
     target: NoteTarget = Depends(resolve_note_target),
     note_service: NoteService = Depends(get_note_service),
-) -> JSONResponse:
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail=NoteError.INVALID_INPUT) from None
-    title = body.get("title")
-    content = body.get("content")
-    tags = body.get("tags")
-    folder = body.get("folder")
-    expected_sha = body.get("expected_sha")
-    temporal_args = temporal_kwargs(body.get("occurred_at"), body.get("period"))
+) -> UpdateNoteResponse:
     try:
         result = await run_sync(
             note_service.update,
             target,
-            expected_sha=expected_sha,
-            title=title,
-            edit=EditSpec(content=content),
-            tags=tags,
-            folder=folder,
-            clear_date_metadata=bool(body.get("clear_date_metadata", False)),
-            **temporal_args,  # ty: ignore[invalid-argument-type] - dict[str, str] spread vs update()'s heterogeneous kwargs; keys are always occurred_at/period
+            expected_sha=body.expected_sha,
+            title=body.title,
+            edit=EditSpec(content=body.content),
+            tags=body.tags,
+            folder=body.folder,
+            clear_date_metadata=body.clear_date_metadata,
+            # temporal_kwargs omits occurred_at/period entirely when None, so an omitted
+            # or explicit-null value falls through to update()'s _UNCHANGED default
+            # instead of being read as "clear this field" (see workspace.temporal_kwargs).
+            **temporal_kwargs(  # ty: ignore[invalid-argument-type] - dict[str, str] spread vs update()'s heterogeneous kwargs; keys are always occurred_at/period
+                body.occurred_at, body.period
+            ),
         )
-    except InvalidFolderError:
-        raise HTTPException(status_code=422, detail=FolderError.INVALID_FOLDER) from None
-    except BrokenWikilinkError as e:
-        raise HTTPException(
-            status_code=422,
-            detail={"error": str(NoteError.BROKEN_WIKILINK), "detail": str(e)},
-        ) from e
+    except InvalidFolderError, TemporalMetadataError, BrokenWikilinkError:
+        raise
     except FileExistsError:
         raise HTTPException(status_code=409, detail=NoteError.ALREADY_EXISTS) from None
-    except TemporalMetadataError as e:
-        raise HTTPException(status_code=422, detail=NoteError.INVALID_INPUT) from e
     except ValueError, FileNotFoundError:
         raise HTTPException(status_code=404, detail=NoteError.NOT_FOUND) from None
     if result.get("stale_sha"):
@@ -200,12 +159,10 @@ async def api_update_note(
             detail={"error": str(NoteError.STALE_VERSION)},
         )
     # Keep the MCP-only replacement count private while exposing public link warnings.
-    return JSONResponse(
-        {
-            "note_id": result["note_id"],
-            "warnings": result["warnings"],
-            "temporal_warnings": result["temporal_warnings"],
-        }
+    return UpdateNoteResponse(
+        note_id=result["note_id"],
+        warnings=result["warnings"],
+        temporal_warnings=result["temporal_warnings"],
     )
 
 
@@ -221,35 +178,20 @@ async def api_update_note(
 async def api_move_note(
     name: str,
     note_id: str,
-    request: Request,
+    body: MoveNoteRequest,
     user: CurrentUser = Depends(get_required_user),
     target: NoteTarget = Depends(resolve_note_target),
     note_service: NoteService = Depends(get_note_service),
-) -> JSONResponse:
+) -> MoveNoteResponse:
     try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail=NoteError.INVALID_INPUT) from None
-    folder = body.get("folder")
-    if not isinstance(folder, str):
-        raise HTTPException(status_code=422, detail=FolderError.PATH_REQUIRED)
-    try:
-        result = await run_sync(
-            note_service.move,
-            target,
-            folder,
-        )
+        result = await run_sync(note_service.move, target, body.folder)
     except InvalidFolderError:
-        raise HTTPException(status_code=422, detail=FolderError.INVALID_FOLDER) from None
-    except ValueError, FileNotFoundError:
-        raise HTTPException(status_code=404, detail=NoteError.NOT_FOUND) from None
+        raise
     except FileExistsError:
         raise HTTPException(status_code=409, detail=NoteError.ALREADY_EXISTS) from None
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": str(NoteError.INVALID_INPUT), "detail": str(e)}
-        ) from e
-    return JSONResponse(result)
+    except ValueError, FileNotFoundError:
+        raise HTTPException(status_code=404, detail=NoteError.NOT_FOUND) from None
+    return MoveNoteResponse(**result)
 
 
 @router.delete(
@@ -263,13 +205,9 @@ async def api_delete_note(
     user: CurrentUser = Depends(get_required_user),
     target: NoteTarget = Depends(resolve_note_target),
     note_service: NoteService = Depends(get_note_service),
-) -> JSONResponse:
+) -> DeleteNoteResponse:
     try:
         await run_sync(note_service.delete, target)
     except ValueError:
         raise HTTPException(status_code=404, detail=NoteError.NOT_FOUND) from None
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": str(NoteError.INVALID_INPUT), "detail": str(e)}
-        ) from e
-    return JSONResponse({"ok": True})
+    return DeleteNoteResponse(ok=True)
