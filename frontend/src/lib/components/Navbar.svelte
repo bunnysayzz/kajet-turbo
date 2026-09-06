@@ -2,14 +2,14 @@
   import { page } from '$app/state';
   import { goto, invalidate } from '$app/navigation';
   import { apiSessionDeleteApiSessionDelete } from '$lib/api';
-  import { graphPath, homePath, notesPath } from '$lib/routes';
+  import { homePath, notesPath } from '$lib/routes';
+  import WorkspaceGraphLink from './WorkspaceGraphLink.svelte';
   import WorkspacePicker from './WorkspacePicker.svelte';
   import UserMenu from './UserMenu.svelte';
 
   const slug = $derived((page.params as Record<string, string>).slug as string | undefined);
 
   const notesActive = $derived(!!slug && page.url.pathname.startsWith(`/workspace/${slug}/note`));
-  const graphActive = $derived(!!slug && page.url.pathname === `/workspace/${slug}/graph`);
 
   async function handleLogout() {
     await apiSessionDeleteApiSessionDelete({ credentials: 'include' });
@@ -28,10 +28,7 @@
         <a href={notesPath(slug)} class="navbar__link" class:navbar__link--active={notesActive}>
           Notes
         </a>
-        <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
-        <a href={graphPath(slug)} class="navbar__link" class:navbar__link--active={graphActive}>
-          Graf
-        </a>
+        <WorkspaceGraphLink {slug} variant="navbar" />
       {/if}
     </div>
     <UserMenu email={page.data.session.email} onLogout={handleLogout} />

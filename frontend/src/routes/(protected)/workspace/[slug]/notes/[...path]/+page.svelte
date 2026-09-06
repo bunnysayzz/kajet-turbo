@@ -6,7 +6,6 @@
   } from '$lib/api';
   import { apiErrorMessage } from '$lib/api/mutate';
   import {
-    graphPath,
     noteEditPath,
     noteInTreePath,
     notesPath,
@@ -20,6 +19,7 @@
   import NotesList from './NotesList.svelte';
   import NotePreview from './NotePreview.svelte';
   import MobileFolderNav from './MobileFolderNav.svelte';
+  import WorkspaceGraphLink from '$lib/components/WorkspaceGraphLink.svelte';
 
   let { data } = $props();
   let slug = $derived(data.slug);
@@ -88,8 +88,7 @@
         />
       {/if}
     </div>
-    <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
-    <a class="explorer__graph" href={graphPath(slug)}>◎ Graf workspace’u</a>
+    <WorkspaceGraphLink {slug} variant="sidebar" />
     <a class="explorer__settings" href={workspaceSettingsPath(slug)}>⚙ Ustawienia</a>
   </aside>
 
@@ -181,18 +180,6 @@
       font-family: v.$font-mono;
       font-size: 0.72rem;
       color: v.$text-muted;
-      text-decoration: none;
-      &:hover {
-        color: v.$accent;
-      }
-    }
-
-    &__graph {
-      flex-shrink: 0;
-      padding: 10px 12px;
-      color: v.$text-muted;
-      font-family: v.$font-mono;
-      font-size: 0.72rem;
       text-decoration: none;
       &:hover {
         color: v.$accent;
