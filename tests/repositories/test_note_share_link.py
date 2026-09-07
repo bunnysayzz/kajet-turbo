@@ -64,18 +64,18 @@ def test_revoke_is_owner_scoped(database: Database):
     repo = NoteShareLinkRepository(database.engine)
     link = repo.create("n1", "ws1", "u1")
 
-    assert repo.revoke("u2", link.token) is False  # not owner
+    assert repo.revoke("u2", "n1", link.token) is False  # not owner
     assert repo.resolve(link.token) is not None  # untouched
 
-    assert repo.revoke("u1", link.token) is True
+    assert repo.revoke("u1", "n1", link.token) is True
     assert repo.resolve(link.token) is None  # revoked token is not live
 
-    assert repo.revoke("u1", link.token) is False  # already revoked, second call is a no-op
+    assert repo.revoke("u1", "n1", link.token) is False  # already revoked, second call is a no-op
 
 
 def test_revoke_unknown_token_returns_false(database: Database):
     repo = NoteShareLinkRepository(database.engine)
-    assert repo.revoke("u1", "does-not-exist") is False
+    assert repo.revoke("u1", "n1", "does-not-exist") is False
 
 
 def test_delete_for_note_in_session_removes_only_that_notes_links(database: Database):
@@ -113,3 +113,20 @@ def test_delete_for_workspace_in_session_is_owner_and_workspace_scoped(database:
     assert repo.resolve(same_ws_same_owner.token) is None
     assert repo.resolve(other_ws_same_owner.token) is not None
     assert repo.resolve(same_ws_other_owner.token) is not None
+
+def test_revoke_is_note_scoped(database: Database):
+    """revoke() must not allow revoking a token that belongs to a different note,
+    even when the caller owns both notes."""
+    seed_user(database, "u1")
+    _note(database.engine, "n1", "ws1", "u1")
+    _note(database.engine, "n2", "ws1", "u1")
+    repo = NoteShareLinkRepository(database.engine)
+    link_n1 = repo.create("n1", "ws1", "u1")
+
+    # Attempting to revoke n1's token via n2's scope must fail
+    assert repo.revoke("u1", "n2", link_n1.token) is False
+    assert repo.resolve(link_n1.token) is not None  # token still live
+
+    # Revoking via the correct note_id succeeds
+    assert repo.revoke("u1", "n1", link_n1.token) is True
+    assert repo.resolve(link_n1.token) is None

@@ -231,7 +231,7 @@ def test_delete_note_with_revoked_share_link_succeeds(service, workspace, databa
         "note_id"
     ]
     link = service._share_link_repo.create(note_id, "ws", "u1")
-    service._share_link_repo.revoke("u1", link.token)
+    service._share_link_repo.revoke("u1", note_id, link.token)
 
     service.delete(note_target("u1", "ws", workspace, note_id))
 

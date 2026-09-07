@@ -57,7 +57,7 @@ class NoteShareLinkRepository(DbRepository):
                 )
             )
 
-    def revoke(self, owner_id: str, token: str) -> bool:
+    def revoke(self, owner_id: str, note_id: str, token: str) -> bool:
         now = datetime.now(UTC).isoformat()
 
         def apply(session: Session, link: NoteShareLink) -> None:
@@ -69,8 +69,13 @@ class NoteShareLinkRepository(DbRepository):
             NoteShareLink,
             token,
             apply,
-            guard=lambda link: link.owner_id == owner_id and link.revoked_at is None,
+            guard=lambda link: (
+                link.owner_id == owner_id
+                and link.note_id == note_id
+                and link.revoked_at is None
+            ),
             owner_id=owner_id,
+            note_id=note_id,
         )
 
     @staticmethod
