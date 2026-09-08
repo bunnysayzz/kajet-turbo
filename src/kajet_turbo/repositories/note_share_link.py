@@ -69,9 +69,9 @@ class NoteShareLinkRepository(DbRepository):
             NoteShareLink,
             token,
             apply,
-            guard=lambda link: link.owner_id == owner_id
-            and link.note_id == note_id
-            and link.revoked_at is None,
+            guard=lambda link: (
+                link.owner_id == owner_id and link.note_id == note_id and link.revoked_at is None
+            ),
             owner_id=owner_id,
         )
 
