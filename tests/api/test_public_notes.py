@@ -29,7 +29,7 @@ def test_revoked_token_returns_404_not_403(auth_client):
     client, note_service, workspace = auth_client
     note_id = note_service.save(_ws(workspace), "Revoked Note", "content", [])["note_id"]
     link = auth_client.share_link_repo.create(note_id, "test-ws", "u1")
-    assert auth_client.share_link_repo.revoke("u1", link.token) is True
+    assert auth_client.share_link_repo.revoke("u1", note_id, link.token) is True
 
     response = client.get(f"/api/public/notes/{link.token}")
 

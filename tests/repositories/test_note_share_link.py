@@ -64,18 +64,31 @@ def test_revoke_is_owner_scoped(database: Database):
     repo = NoteShareLinkRepository(database.engine)
     link = repo.create("n1", "ws1", "u1")
 
-    assert repo.revoke("u2", link.token) is False  # not owner
+    assert repo.revoke("u2", "n1", link.token) is False  # not owner
     assert repo.resolve(link.token) is not None  # untouched
 
-    assert repo.revoke("u1", link.token) is True
+    assert repo.revoke("u1", "n1", link.token) is True
     assert repo.resolve(link.token) is None  # revoked token is not live
 
-    assert repo.revoke("u1", link.token) is False  # already revoked, second call is a no-op
+    assert repo.revoke("u1", "n1", link.token) is False  # already revoked, second call is a no-op
+
+
+def test_revoke_is_note_scoped(database: Database):
+    seed_user(database, "u1")
+    _note(database.engine, "n1", "ws1", "u1")
+    _note(database.engine, "n2", "ws1", "u1")
+    repo = NoteShareLinkRepository(database.engine)
+    link = repo.create("n1", "ws1", "u1")
+
+    assert repo.revoke("u1", "n2", link.token) is False  # another note of the same owner
+    assert repo.resolve(link.token) is not None  # untouched
+
+    assert repo.revoke("u1", "n1", link.token) is True
 
 
 def test_revoke_unknown_token_returns_false(database: Database):
     repo = NoteShareLinkRepository(database.engine)
-    assert repo.revoke("u1", "does-not-exist") is False
+    assert repo.revoke("u1", "n1", "does-not-exist") is False
 
 
 def test_delete_for_note_in_session_removes_only_that_notes_links(database: Database):
