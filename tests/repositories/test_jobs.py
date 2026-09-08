@@ -455,7 +455,7 @@ def _make_failed(repo: JobRepository, engine, *, user_id: str, now: float = 1000
         assert claimed is not None
         if claimed.id == job_id:
             break
-        assert repo.complete(claimed.id, claimed.locked_by, now=now) is True
+        assert repo.complete(claimed.id, "w", now=now) is True
     repo.fail(job_id, "w", "boom", now=now)  # max_attempts=1 -> failed
     return job_id
 

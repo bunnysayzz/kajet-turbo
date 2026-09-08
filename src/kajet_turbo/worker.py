@@ -53,6 +53,11 @@ def run_job(repo: JobRepository, job: Job, registry: dict[str, Handler]) -> None
     error: Exception | None = None
     repo_error: Exception | None = None
 
+    # claim() always sets locked_by before a job reaches run_job(); narrow it once
+    # here so complete()/fail()/fail_terminal()'s worker_id: str fences type-check.
+    worker_id = job.locked_by
+    assert worker_id is not None, "run_job called with an unclaimed job"
+
     def write(fn: Callable[[], _T]) -> _T | None:
         nonlocal repo_error
         try:
@@ -64,13 +69,11 @@ def run_job(repo: JobRepository, job: Job, registry: dict[str, Handler]) -> None
     with perf_span() as span:
         handler = registry.get(job.kind)
         if handler is None:
-            outcome = "no_handler"
             level = "WARNING"
-            write(
-                lambda: repo.fail_terminal(
-                    job.id, job.locked_by, f"no handler for kind {job.kind!r}"
-                )
+            applied = write(
+                lambda: repo.fail_terminal(job.id, worker_id, f"no handler for kind {job.kind!r}")
             )
+            outcome = "no_handler" if applied is not False else "superseded"
         else:
             try:
                 handler(json.loads(job.payload))
@@ -78,7 +81,7 @@ def run_job(repo: JobRepository, job: Job, registry: dict[str, Handler]) -> None
                 error = exc
                 error_message = str(exc)
                 level = "WARNING"
-                status = write(lambda: repo.fail(job.id, job.locked_by, error_message))
+                status = write(lambda: repo.fail(job.id, worker_id, error_message))
                 # A write failure leaves the job's real status unknown (the transaction
                 # rolled back), so it is not reported as either "failed" or "retrying".
                 if repo_error is not None:
@@ -91,7 +94,7 @@ def run_job(repo: JobRepository, job: Job, registry: dict[str, Handler]) -> None
                     outcome = "failed" if status == "failed" else "retrying"
             else:
                 level = "INFO"
-                applied = write(lambda: repo.complete(job.id, job.locked_by))
+                applied = write(lambda: repo.complete(job.id, worker_id))
                 # applied is None on write failure (outcome stays "completed" with
                 # repo_write_failed=True, as before); False means reclaimed.
                 outcome = "completed" if applied is not False else "superseded"

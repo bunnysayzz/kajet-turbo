@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from itertools import batched
 
 from nanoid import generate
-from sqlalchemy import func, text
+from sqlalchemy import func, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlmodel import Session, col, select
 
@@ -351,15 +351,13 @@ class JobRepository(DbRepository):
         now = time.time() if now is None else now
         with self.operation("complete", job_id=job_id) as operation:
             session = operation.session
-            result = session.execute(  # ty: ignore[deprecated] - raw SQL
-                text(
-                    "UPDATE jobs SET status='done', updated_at=:now "
-                    "WHERE id=:id AND locked_by=:worker"
-                ),
-                {"now": now, "id": job_id, "worker": worker_id},
+            result = session.exec(
+                update(Job)
+                .where(col(Job.id) == job_id, col(Job.locked_by) == worker_id)
+                .values(status="done", updated_at=now)
             )
             session.commit()
-            if result.rowcount == 0:  # ty: ignore[unresolved-attribute] - CursorResult has rowcount; ty loses it through Result[Any]
+            if result.rowcount == 0:
                 operation.outcome = "superseded"
                 operation.add_fields(worker_id=worker_id)
                 return False
@@ -378,7 +376,11 @@ class JobRepository(DbRepository):
         """Record a handler failure. Returns the job's resulting status
         (``"failed"`` or ``"pending"``), ``None`` if the job no longer exists,
         or ``"superseded"`` when the row was already reclaimed by another
-        worker — the write is then a no-op (#334)."""
+        worker — the write is then a no-op (#334). The new attempts/status/backoff
+        are computed from a plain read, but committed through a single fenced
+        ``UPDATE ... WHERE id=:id AND locked_by=:worker`` — like ``complete()``/
+        ``fail_terminal()`` — so a reclaim between the read and the write loses
+        the race instead of silently overwriting the new owner's row."""
         now = time.time() if now is None else now
         with self.operation("fail", job_id=job_id) as operation:
             session = operation.session
@@ -386,25 +388,38 @@ class JobRepository(DbRepository):
             if job is None:
                 operation.suppress_log()
                 return None
-            if job.locked_by != worker_id:
-                operation.outcome = "superseded"
-                operation.add_fields(worker_id=worker_id, locked_by=job.locked_by)
-                return "superseded"
-            job.attempts += 1
-            job.last_error = error
-            job.updated_at = now
-            if job.attempts >= job.max_attempts:
-                job.status = "failed"
+            kind = job.kind
+            attempts = job.attempts + 1
+            if attempts >= job.max_attempts:
+                status = "failed"
+                locked_by: str | None = worker_id
+                locked_at = job.locked_at
+                next_run_at = job.next_run_at
             else:
-                job.status = "pending"
-                job.next_run_at = now + backoff_seconds(job.attempts, base_backoff, max_backoff)
-                job.locked_by = None
-                job.locked_at = None
-            session.add(job)
+                status = "pending"
+                next_run_at = now + backoff_seconds(attempts, base_backoff, max_backoff)
+                locked_by, locked_at = None, None
+            result = session.exec(
+                update(Job)
+                .where(col(Job.id) == job_id, col(Job.locked_by) == worker_id)
+                .values(
+                    attempts=attempts,
+                    last_error=error,
+                    updated_at=now,
+                    status=status,
+                    next_run_at=next_run_at,
+                    locked_by=locked_by,
+                    locked_at=locked_at,
+                )
+            )
             session.commit()
-            operation.outcome = job.status
-            operation.add_fields(kind=job.kind, attempts=job.attempts)
-            return job.status
+            if result.rowcount == 0:
+                operation.outcome = "superseded"
+                operation.add_fields(worker_id=worker_id)
+                return "superseded"
+            operation.outcome = status
+            operation.add_fields(kind=kind, attempts=attempts)
+            return status
 
     def fail_terminal(
         self, job_id: str, worker_id: str, error: str, *, now: float | None = None
@@ -414,15 +429,13 @@ class JobRepository(DbRepository):
         now = time.time() if now is None else now
         with self.operation("fail_terminal", job_id=job_id) as operation:
             session = operation.session
-            result = session.execute(  # ty: ignore[deprecated] - raw SQL
-                text(
-                    "UPDATE jobs SET status='failed', last_error=:err, updated_at=:now "
-                    "WHERE id=:id AND locked_by=:worker"
-                ),
-                {"err": error, "now": now, "id": job_id, "worker": worker_id},
+            result = session.exec(
+                update(Job)
+                .where(col(Job.id) == job_id, col(Job.locked_by) == worker_id)
+                .values(status="failed", last_error=error, updated_at=now)
             )
             session.commit()
-            if result.rowcount == 0:  # ty: ignore[unresolved-attribute] - CursorResult has rowcount; ty loses it through Result[Any]
+            if result.rowcount == 0:
                 operation.outcome = "superseded"
                 operation.add_fields(worker_id=worker_id)
                 return False
