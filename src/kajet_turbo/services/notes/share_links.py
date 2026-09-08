@@ -29,10 +29,7 @@ class NoteShareLinkService:
         ]
 
     def revoke(self, target: NoteTarget, token: str) -> bool:
-        # resolve() already treats a revoked/unknown token as not-found; the note_id
-        # check on top of that is what stops this note-scoped route from revoking a
-        # token that belongs to a different note the same owner controls.
-        link = self._repo.resolve(token)
-        if link is None or link.note_id != target.note_id:
-            return False
-        return self._repo.revoke(target.workspace.owner_id, token)
+        # One round-trip: the repository guard enforces owner scope, note scope
+        # (a token belonging to a different note the same owner controls must
+        # not revoke), and the not-already-revoked check in a single fetch.
+        return self._repo.revoke(target.workspace.owner_id, target.note_id, token)
