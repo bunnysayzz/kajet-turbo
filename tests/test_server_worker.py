@@ -17,7 +17,7 @@ def test_sweep_handler_purges_old_done_jobs(database: Database):
     jobs = JobRepository(database.engine)
     old_done = jobs.enqueue("k", {}, now=1000.0)
     jobs.claim("w1", now=1000.0)
-    jobs.complete(old_done, now=1000.0)  # updated_at in 1970 → far older than 24h
+    jobs.complete(old_done, "w1", now=1000.0)  # updated_at in 1970 → far older than 24h
 
     _make_sweep_handler(events, jobs)({})
 

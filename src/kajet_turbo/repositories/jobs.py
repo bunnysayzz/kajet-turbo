@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from itertools import batched
 
 from nanoid import generate
-from sqlalchemy import func, text
+from sqlalchemy import func, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlmodel import Session, col, select
 
@@ -342,19 +342,31 @@ class JobRepository(DbRepository):
             operation.report_count(count)
             return count
 
-    def complete(self, job_id: str, *, now: float | None = None) -> None:
+    def complete(self, job_id: str, worker_id: str, *, now: float | None = None) -> bool:
+        """Mark a claimed job done. Returns True, or False when the row was already
+        reclaimed by another worker — the write is then a no-op (#334). Only the
+        current lock holder may transition the row: the WHERE clause fences on
+        ``locked_by`` so a starved worker's late write cannot clobber the new
+        owner's work."""
         now = time.time() if now is None else now
         with self.operation("complete", job_id=job_id) as operation:
             session = operation.session
-            session.execute(  # ty: ignore[deprecated] - raw SQL
-                text("UPDATE jobs SET status='done', updated_at=:now WHERE id=:id"),
-                {"now": now, "id": job_id},
+            result = session.exec(
+                update(Job)
+                .where(col(Job.id) == job_id, col(Job.locked_by) == worker_id)
+                .values(status="done", updated_at=now)
             )
             session.commit()
+            if result.rowcount == 0:
+                operation.outcome = "superseded"
+                operation.add_fields(worker_id=worker_id)
+                return False
+            return True
 
     def fail(
         self,
         job_id: str,
+        worker_id: str,
         error: str,
         *,
         now: float | None = None,
@@ -362,7 +374,13 @@ class JobRepository(DbRepository):
         max_backoff: float = 300.0,
     ) -> str | None:
         """Record a handler failure. Returns the job's resulting status
-        (``"failed"`` or ``"pending"``), or ``None`` if the job no longer exists."""
+        (``"failed"`` or ``"pending"``), ``None`` if the job no longer exists,
+        or ``"superseded"`` when the row was already reclaimed by another
+        worker — the write is then a no-op (#334). The new attempts/status/backoff
+        are computed from a plain read, but committed through a single fenced
+        ``UPDATE ... WHERE id=:id AND locked_by=:worker`` — like ``complete()``/
+        ``fail_terminal()`` — so a reclaim between the read and the write loses
+        the race instead of silently overwriting the new owner's row."""
         now = time.time() if now is None else now
         with self.operation("fail", job_id=job_id) as operation:
             session = operation.session
@@ -370,33 +388,58 @@ class JobRepository(DbRepository):
             if job is None:
                 operation.suppress_log()
                 return None
-            job.attempts += 1
-            job.last_error = error
-            job.updated_at = now
-            if job.attempts >= job.max_attempts:
-                job.status = "failed"
+            kind = job.kind
+            attempts = job.attempts + 1
+            if attempts >= job.max_attempts:
+                status = "failed"
+                locked_by: str | None = worker_id
+                locked_at = job.locked_at
+                next_run_at = job.next_run_at
             else:
-                job.status = "pending"
-                job.next_run_at = now + backoff_seconds(job.attempts, base_backoff, max_backoff)
-                job.locked_by = None
-                job.locked_at = None
-            session.add(job)
+                status = "pending"
+                next_run_at = now + backoff_seconds(attempts, base_backoff, max_backoff)
+                locked_by, locked_at = None, None
+            result = session.exec(
+                update(Job)
+                .where(col(Job.id) == job_id, col(Job.locked_by) == worker_id)
+                .values(
+                    attempts=attempts,
+                    last_error=error,
+                    updated_at=now,
+                    status=status,
+                    next_run_at=next_run_at,
+                    locked_by=locked_by,
+                    locked_at=locked_at,
+                )
+            )
             session.commit()
-            operation.outcome = job.status
-            operation.add_fields(kind=job.kind, attempts=job.attempts)
-            return job.status
+            if result.rowcount == 0:
+                operation.outcome = "superseded"
+                operation.add_fields(worker_id=worker_id)
+                return "superseded"
+            operation.outcome = status
+            operation.add_fields(kind=kind, attempts=attempts)
+            return status
 
-    def fail_terminal(self, job_id: str, error: str, *, now: float | None = None) -> None:
+    def fail_terminal(
+        self, job_id: str, worker_id: str, error: str, *, now: float | None = None
+    ) -> bool:
+        """Fail a job without retry. Returns True, or False when the row was already
+        reclaimed by another worker — the write is then a no-op (#334)."""
         now = time.time() if now is None else now
         with self.operation("fail_terminal", job_id=job_id) as operation:
             session = operation.session
-            session.execute(  # ty: ignore[deprecated] - raw SQL
-                text(
-                    "UPDATE jobs SET status='failed', last_error=:err, updated_at=:now WHERE id=:id"
-                ),
-                {"err": error, "now": now, "id": job_id},
+            result = session.exec(
+                update(Job)
+                .where(col(Job.id) == job_id, col(Job.locked_by) == worker_id)
+                .values(status="failed", last_error=error, updated_at=now)
             )
             session.commit()
+            if result.rowcount == 0:
+                operation.outcome = "superseded"
+                operation.add_fields(worker_id=worker_id)
+                return False
+            return True
 
     def reset_running_to_pending(self, worker_id: str, *, now: float | None = None) -> int:
         now = time.time() if now is None else now

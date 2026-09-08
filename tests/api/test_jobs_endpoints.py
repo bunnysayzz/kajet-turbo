@@ -48,7 +48,7 @@ def test_list_jobs_filters_by_status(database, monkeypatch):
     client, repo = _app(database, monkeypatch)
     job_id = repo.enqueue("k", {}, user_id="u1", max_attempts=1, now=1000.0)
     repo.claim("w", now=1000.0)
-    repo.fail(job_id, "boom", now=1000.0)  # failed
+    repo.fail(job_id, "w", "boom", now=1000.0)  # failed
     repo.enqueue("other", {}, user_id="u1", now=1000.0)  # pending
 
     failed = client.get("/api/me/jobs", params={"status": "failed"}).json()["jobs"]
@@ -64,7 +64,7 @@ def test_list_jobs_empty_status_query_means_no_filter(database, monkeypatch):
     client, repo = _app(database, monkeypatch)
     job_id = repo.enqueue("k", {}, user_id="u1", max_attempts=1, now=1000.0)
     repo.claim("w", now=1000.0)
-    repo.fail(job_id, "boom", now=1000.0)  # failed
+    repo.fail(job_id, "w", "boom", now=1000.0)  # failed
     repo.enqueue("other", {}, user_id="u1", now=1000.0)  # pending
 
     jobs = client.get("/api/me/jobs", params={"status": ""}).json()["jobs"]
@@ -75,7 +75,7 @@ def test_retry_failed_job(database, monkeypatch):
     client, repo = _app(database, monkeypatch)
     job_id = repo.enqueue("k", {}, user_id="u1", max_attempts=1, now=1000.0)
     repo.claim("w", now=1000.0)
-    repo.fail(job_id, "boom", now=1000.0)  # failed
+    repo.fail(job_id, "w", "boom", now=1000.0)  # failed
     resp = client.post(f"/api/me/jobs/{job_id}/retry")
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
@@ -96,7 +96,7 @@ def test_dismiss_terminal_job(database, monkeypatch):
     client, repo = _app(database, monkeypatch)
     job_id = repo.enqueue("k", {}, user_id="u1", max_attempts=1, now=1000.0)
     repo.claim("w", now=1000.0)
-    repo.fail(job_id, "boom", now=1000.0)  # failed (terminal)
+    repo.fail(job_id, "w", "boom", now=1000.0)  # failed (terminal)
     resp = client.delete(f"/api/me/jobs/{job_id}")
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
