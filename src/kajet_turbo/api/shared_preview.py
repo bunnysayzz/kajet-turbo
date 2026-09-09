@@ -124,4 +124,13 @@ async def shared_note_preview(
         description = _excerpt(note.content) if link.preview_description else _GENERIC_DESCRIPTION
 
     meta = _meta_html(title=title, description=description, url=str(request.url))
-    return HTMLResponse(content=head + meta + tail, headers=_NO_STORE)
+    response = HTMLResponse(content=head + meta + tail, headers=_NO_STORE)
+    if resolved is not None and request.method == "GET":
+        await run_sync(
+            share_link_repo.record_visit,
+            token,
+            request.client.host if request.client is not None else None,
+            request.headers.get("user-agent"),
+            kind="page",
+        )
+    return response

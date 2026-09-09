@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from kajet_turbo.api.schemas import NoteHtmlResponse
 from kajet_turbo.api.schemas.errors import ErrorResponse
@@ -37,9 +37,8 @@ def resolve_shared_note(
     the preview route also needs the link itself (for ``preview_description``), which a
     fields-only return would have thrown away.
 
-    Any future visit-counting (#365) belongs at the call site that reaches human traffic
-    (``api_get_public_note`` below), never inside this function or ``resolve()`` -- the
-    preview route calls this too, from crawlers that must not be counted as visits.
+    Each caller records its own event kind after rendering succeeds; resolution alone
+    must not count either a page view or a content read.
     """
     link = share_link_repo.resolve(token)
     if link is None:
@@ -59,6 +58,8 @@ def resolve_shared_note(
 
 def _load_public_note(
     token: str,
+    ip: str | None,
+    user_agent: str | None,
     share_link_repo: NoteShareLinkRepository,
     workspace_service: WorkspaceService,
     note_read_service: NoteReadService,
@@ -74,7 +75,9 @@ def _load_public_note(
     # <span> instead of a real <a href> pointing at the note's folder/id -- the link text
     # itself (a note title) still renders, only the location it would otherwise expose does
     # not. See #348 for the full wikilink-leak scope this endpoint intentionally defers to.
-    return note_html_fields(note)
+    fields = note_html_fields(note)
+    share_link_repo.record_visit(token, ip, user_agent)
+    return fields
 
 
 @router.get(
@@ -84,6 +87,7 @@ def _load_public_note(
 )
 async def api_get_public_note(
     token: str,
+    request: Request,
     response: Response,
     share_link_repo: NoteShareLinkRepository = Depends(get_note_share_link_repo),
     workspace_service: WorkspaceService = Depends(get_workspace_service),
@@ -92,8 +96,16 @@ async def api_get_public_note(
     # A revoked token must 404 on the very next request even through a caching proxy.
     # HTTPException(headers=...) below covers the 404 branch; this covers the 200 one.
     response.headers.update(_NO_STORE)
+    ip = request.client.host if request.client is not None else None
+    user_agent = request.headers.get("user-agent")
     fields = await run_sync(
-        _load_public_note, token, share_link_repo, workspace_service, note_read_service
+        _load_public_note,
+        token,
+        ip,
+        user_agent,
+        share_link_repo,
+        workspace_service,
+        note_read_service,
     )
     if fields is None:
         raise HTTPException(status_code=404, detail=NoteError.NOT_FOUND, headers=_NO_STORE)

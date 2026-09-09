@@ -14,10 +14,21 @@ class NoteShareLinkService:
         self._repo = repo
 
     @staticmethod
-    def _view(link: NoteShareLink) -> dict:
+    def _view(
+        link: NoteShareLink,
+        *,
+        visit_count: int = 0,
+        last_visited_at: str | None = None,
+        page_view_count: int = 0,
+        last_page_viewed_at: str | None = None,
+    ) -> dict:
         return {
             "token": link.token,
             "created_at": link.created_at,
+            "visit_count": visit_count,
+            "last_visited_at": last_visited_at,
+            "page_view_count": page_view_count,
+            "last_page_viewed_at": last_page_viewed_at,
             "preview_description": link.preview_description,
         }
 
@@ -32,9 +43,14 @@ class NoteShareLinkService:
 
     def list_active(self, target: NoteTarget) -> list[dict]:
         return [
-            self._view(link)
-            for link in self._repo.list_for_note(target.note_id)
-            if link.revoked_at is None
+            self._view(
+                summary.link,
+                visit_count=summary.visit_count,
+                last_visited_at=summary.last_visited_at,
+                page_view_count=summary.page_view_count,
+                last_page_viewed_at=summary.last_page_viewed_at,
+            )
+            for summary in self._repo.list_active_with_visit_summary(target.note_id)
         ]
 
     def revoke(self, target: NoteTarget, token: str) -> bool:

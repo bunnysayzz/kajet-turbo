@@ -223,6 +223,27 @@ class NoteShareLink(SQLModel, table=True):
     )
 
 
+class NoteShareLinkVisit(SQLModel, table=True):
+    """One served public read of a share link.
+
+    IP address and user agent are intentionally retained only for the short period
+    enforced by the sweep job. They are not exposed through the owner-facing API.
+    """
+
+    __tablename__ = "note_share_link_visits"
+
+    id: int | None = Field(default=None, primary_key=True)
+    kind: str = Field(
+        default="content", sa_column=Column(Text, nullable=False, server_default="content")
+    )
+    token: str = Field(sa_column=Column(Text, ForeignKey("note_share_links.token"), nullable=False))
+    ip: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    user_agent: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    created_at: str = Field(sa_column=Column(Text, nullable=False))
+
+    __table_args__ = (Index("ix_note_share_link_visits_token_created_at", "token", "created_at"),)
+
+
 class OAuthRegisteredClient(SQLModel, table=True):
     __tablename__ = "oauth_registered_clients"
 

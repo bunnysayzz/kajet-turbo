@@ -2,11 +2,39 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from sqlmodel import select
 
 from kajet_turbo.api import shared_preview
+from kajet_turbo.models import NoteShareLinkVisit
 from kajet_turbo.services.targets import NoteTarget, WorkspaceTarget
 
 _SHELL = '<html><head><title>kajet</title></head><body><div id="app"></div></body></html>'
+
+
+def test_page_and_content_statistics_are_separate(auth_client):
+    client, note_service, workspace = auth_client
+    note_id = note_service.save(_ws(workspace), "Shared", "content", [])["note_id"]
+    repo = auth_client.share_link_repo
+    link = repo.create(note_id, "test-ws", "u1")
+    assert (
+        client.get(f"/shared/{link.token}", headers={"user-agent": "Preview/1"}).status_code == 200
+    )
+    assert client.head(f"/shared/{link.token}").status_code == 200
+    summary = repo.list_active_with_visit_summary(note_id)[0]
+    assert summary.page_view_count == 1
+    assert summary.visit_count == 0
+    assert summary.last_page_viewed_at is not None
+    assert summary.last_visited_at is None
+    assert client.get(f"/api/public/notes/{link.token}").status_code == 200
+    summary = repo.list_active_with_visit_summary(note_id)[0]
+    assert summary.page_view_count == summary.visit_count == 1
+    assert summary.last_visited_at is not None
+    with repo.timed_session() as session:
+        visits = session.exec(select(NoteShareLinkVisit)).all()
+    assert {visit.kind for visit in visits} == {"page", "content"}
+    page = next(visit for visit in visits if visit.kind == "page")
+    assert page.user_agent == "Preview/1"
+    assert page.ip == "testclient"
 
 
 def _ws(ws_path) -> WorkspaceTarget:
@@ -134,6 +162,8 @@ def test_unknown_and_revoked_token_render_identical_neutral_bodies(auth_client):
     revoked_body = revoked_response.text.replace(token, "TOKEN")
     unknown_body = unknown_response.text.replace("this-token-was-never-issued", "TOKEN")
     assert revoked_body == unknown_body
+    with auth_client.share_link_repo.timed_session() as session:
+        assert session.exec(select(NoteShareLinkVisit)).all() == []
 
 
 def test_no_build_present_404s_instead_of_crashing(auth_client, tmp_path, monkeypatch):
