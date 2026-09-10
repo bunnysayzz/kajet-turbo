@@ -1,8 +1,13 @@
-"""Pure calendar-period arithmetic built on Gregorian dates and ISO weeks."""
+"""Calendar-period arithmetic built on Gregorian dates and ISO weeks.
+
+Pure, with one exception: :func:`today_in` reads the system clock (unless given
+``now`` explicitly).
+"""
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 PeriodKind = Literal["day", "week", "month", "year"]
 
@@ -162,3 +167,18 @@ def month_of_week(w: Period) -> Period:
     if w.kind != "week":
         raise ValueError("w must be a week period.")
     return Period.containing(w._start() + timedelta(days=3), "month")
+
+
+def today_in(tz: str, *, now: datetime | None = None) -> date:
+    """Calendar date "today" is currently in ``tz``, or at ``now`` if given.
+
+    ``now`` is injectable so midnight/DST-transition tests are deterministic rather
+    than flaky at whatever hour CI happens to run. It must be timezone-aware: a naive
+    ``now`` would have ``astimezone`` silently interpret it in the host's local
+    timezone instead of raising, defeating the point of an explicit, deterministic
+    instant.
+    """
+    if now is not None and now.utcoffset() is None:
+        raise ValueError("today_in's now must be timezone-aware, not naive.")
+    moment = now if now is not None else datetime.now(UTC)
+    return moment.astimezone(ZoneInfo(tz)).date()
