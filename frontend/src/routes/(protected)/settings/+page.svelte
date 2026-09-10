@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { goto, invalidateAll } from '$app/navigation';
+  import { goto, invalidate, invalidateAll } from '$app/navigation';
   import {
     apiListEmbeddingProfilesApiMeEmbeddingProfilesGet,
     apiCreateEmbeddingProfileApiMeEmbeddingProfilesPost,
@@ -9,15 +9,42 @@
     apiCreateSshKeyApiMeSshKeysPost,
     apiDeleteSshKeyApiMeSshKeysKeyIdDelete,
     apiSessionsDeleteApiSessionsDelete,
+    apiUpdatePreferencesApiMePreferencesPatch,
     CreateSshKeyRequestAlgorithm,
   } from '$lib/api';
   import { useAsyncAction } from '$lib/utils/async-action.svelte';
   import { copyToClipboard } from '$lib/utils/clipboard';
+  import { groupTimezones } from '$lib/utils/groupTimezones';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
   import { homePath } from '$lib/routes';
 
   let { data } = $props();
+
+  // Timezone preference. `(protected)/+layout.ts` redirects when there is no session, but
+  // that guard isn't visible to the merged PageData type, hence the assertion. We snapshot
+  // the initial value rather than react to `data`, same as `profiles`/`keys` above.
+  // svelte-ignore state_referenced_locally
+  let timezone = $state(data.session!.preferences.timezone);
+  const timezoneAction = useAsyncAction();
+  const detectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const timezoneGroups = $derived(groupTimezones(Intl.supportedValuesOf('timeZone'), timezone));
+
+  // Single save path for both the select and the "detect" button: both only assign
+  // `timezone`, and this effect persists whatever it changes to. Skipping the first run
+  // avoids a PATCH for the value the page was already loaded with.
+  let timezoneFirstRun = true;
+  $effect(() => {
+    const tz = timezone;
+    if (timezoneFirstRun) {
+      timezoneFirstRun = false;
+      return;
+    }
+    void timezoneAction.run(async () => {
+      await apiUpdatePreferencesApiMePreferencesPatch({ timezone: tz });
+      await invalidate('app:session');
+    }, 'Nie udało się zapisać strefy czasowej.');
+  });
 
   // Seed local state from the load data. The list endpoint is the single source
   // of truth; we reassign `profiles` after every mutation via reload(), so we
@@ -116,6 +143,37 @@
 </script>
 
 <main class="page">
+  <section class="prefs-section">
+    <h1>Preferencje</h1>
+    <p class="hint">Strefa czasowa używana do wyświetlania znaczników czasu.</p>
+
+    {#if timezoneAction.error}<p class="profiles__error">{timezoneAction.error}</p>{/if}
+
+    <div class="add-form">
+      <label class="add-form__field">
+        <span>Strefa czasowa</span>
+        <select class="add-form__select" bind:value={timezone} disabled={timezoneAction.busy}>
+          {#each timezoneGroups as group (group.label)}
+            <optgroup label={group.label}>
+              {#each group.zones as tz (tz)}
+                <option value={tz}>{tz}</option>
+              {/each}
+            </optgroup>
+          {/each}
+        </select>
+      </label>
+
+      <button
+        type="button"
+        class="btn-primary add-form__btn"
+        disabled={timezoneAction.busy || detectedTimezone === timezone}
+        onclick={() => (timezone = detectedTimezone)}
+      >
+        Wykryj z przeglądarki ({detectedTimezone})
+      </button>
+    </div>
+  </section>
+
   <h1>Profile embeddingów</h1>
   <p class="hint">Konfiguracja embedderów używanych do wyszukiwania semantycznego.</p>
 
